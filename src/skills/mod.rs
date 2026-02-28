@@ -256,7 +256,7 @@ fn load_skills_from_directory(
 
         match audit::audit_skill_directory_with_options(
             &path,
-            audit::SkillAuditOptions { allow_scripts },
+            audit::SkillAuditOptions { allow_scripts, audit_root: None },
         ) {
             Ok(report) if report.is_clean() => {}
             Ok(report) => {
@@ -300,6 +300,9 @@ fn load_open_skills(repo_dir: &Path, allow_scripts: bool) -> Vec<Skill> {
     // as executable skills.
     let nested_skills_dir = repo_dir.join("skills");
     if nested_skills_dir.is_dir() {
+        // Use the repo root as the audit boundary so cross-skill markdown
+        // references (e.g. `../web-search-api/SKILL.md`) are accepted.
+        // Note: audit_root not used here as SkillAuditOptions handles it differently
         return load_skills_from_directory(&nested_skills_dir, allow_scripts, &[]);
     }
 

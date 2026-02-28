@@ -2191,8 +2191,29 @@ pub async fn run_tool_call_loop(
                 let secs = outcome.duration.as_secs();
                 progress_tracker.complete(*idx, outcome.success, secs);
                 if let Some(ref tx) = on_delta {
+                    let icon = if outcome.success {
+                        "\u{2705}"
+                    } else {
+                        "\u{274c}"
+                    };
                     tracing::debug!(tool = %call.name, secs, "Sending progress complete to draft");
-                    let _ = tx.send(progress_tracker.render_delta()).await;
+                    let _ = tx.send(format!("{icon} {} ({secs}s)\n", call.name)).await;
+
+                    // Send structured tool result for rich consumers (e.g. desktop UI).
+                    // Format: \x01TOOL_RESULT\x02name\x02success\x02output\x01
+                    let result_preview = if outcome.output.len() > 4000 {
+                        format!("{}…(truncated)", &outcome.output[..4000])
+                    } else {
+                        outcome.output.clone()
+                    };
+                    let _ = tx
+                        .send(format!(
+                            "\x01TOOL_RESULT\x02{}\x02{}\x02{}\x01",
+                            call.name,
+                            if outcome.success { "true" } else { "false" },
+                            result_preview,
+                        ))
+                        .await;
                 }
             }
 

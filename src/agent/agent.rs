@@ -255,6 +255,113 @@ impl Agent {
         self.history.clear();
     }
 
+    /// Return the tool specs registered with this agent (for dynamic UI listing).
+    pub fn tool_specs(&self) -> &[ToolSpec] {
+        &self.tool_specs
+    }
+
+    /// Streaming turn: same as `turn()` but sends progress events through an
+    /// `mpsc::Sender<String>`.  The sender receives:
+    ///   - `"🤔 Thinking..."` / `"🤔 Thinking (round N)..."`
+    ///   - `"⏳ tool_name: args_hint"` when a tool starts
+    ///   - `"✅ tool_name (Ns)"` / `"❌ tool_name (Ns)"` when a tool finishes
+    ///   - `"\x00CLEAR\x00"` sentinel before final answer
+    ///   - Incremental text chunks of the final answer
+    pub async fn turn_streaming(
+        &mut self,
+        user_message: &str,
+        on_delta: tokio::sync::mpsc::Sender<String>,
+    ) -> Result<String> {
+        use super::loop_::run_tool_call_loop;
+        use crate::providers::ChatMessage as ProvChatMessage;
+
+        // Initialise system prompt on first call.
+        if self.history.is_empty() {
+            let system_prompt = self.build_system_prompt()?;
+            self.history
+                .push(ConversationMessage::Chat(ProvChatMessage::system(
+                    system_prompt,
+                )));
+        }
+
+        // Auto-save user message to memory.
+        if self.auto_save {
+            let _ = self
+                .memory
+                .store("user_msg", user_message, MemoryCategory::Conversation, None)
+                .await;
+        }
+
+        // Context enrichment — same as turn().
+        let context = self
+            .memory_loader
+            .load_context(self.memory.as_ref(), user_message)
+            .await
+            .unwrap_or_default();
+
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z");
+        let enriched = if context.is_empty() {
+            format!("[{now}] {user_message}")
+        } else {
+            format!("{context}[{now}] {user_message}")
+        };
+
+        // Convert ConversationMessage history → provider ChatMessage history
+        // needed by run_tool_call_loop.
+        let mut chat_history: Vec<ProvChatMessage> = self
+            .history
+            .iter()
+            .filter_map(|cm| match cm {
+                ConversationMessage::Chat(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        chat_history.push(ProvChatMessage::user(enriched.clone()));
+
+        // Also push the user message into our structured history.
+        self.history
+            .push(ConversationMessage::Chat(ProvChatMessage::user(enriched)));
+
+        let effective_model = self.classify_model(user_message);
+
+        // Delegate to the existing run_tool_call_loop which already supports
+        // on_delta streaming, tool approval, hooks, parallel tools etc.
+        let result = run_tool_call_loop(
+            self.provider.as_ref(),
+            &mut chat_history,
+            &self.tools,
+            self.observer.as_ref(),
+            "", // provider_name (cosmetic, used for tracing)
+            &effective_model,
+            self.temperature,
+            true,      // silent — don't print to stdout
+            None,      // approval
+            "desktop", // channel_name
+            &crate::config::MultimodalConfig::default(),
+            self.config.max_tool_iterations,
+            None, // cancellation_token
+            Some(on_delta),
+            None, // hooks
+            &[],  // excluded_tools
+        )
+        .await;
+
+        // Sync the chat_history mutations (tool results, assistant messages)
+        // back into our ConversationMessage history.
+        // We already had N messages; anything new from the loop is appended.
+        let existing_chat_count = self
+            .history
+            .iter()
+            .filter(|cm| matches!(cm, ConversationMessage::Chat(_)))
+            .count();
+        for msg in chat_history.into_iter().skip(existing_chat_count) {
+            self.history.push(ConversationMessage::Chat(msg));
+        }
+        self.trim_history();
+
+        result
+    }
+
     pub fn from_config(config: &Config) -> Result<Self> {
         if let Err(error) = crate::plugins::runtime::initialize_from_config(&config.plugins) {
             tracing::warn!("plugin registry initialization skipped: {error}");

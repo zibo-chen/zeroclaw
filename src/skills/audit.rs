@@ -7,8 +7,11 @@ use std::sync::OnceLock;
 const MAX_TEXT_FILE_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct SkillAuditOptions {
+pub struct SkillAuditOptions<'a> {
     pub allow_scripts: bool,
+    /// When set, markdown links that resolve within this root are accepted even
+    /// if they leave the individual skill directory. Used for open-skills repositories.
+    pub audit_root: Option<&'a Path>,
 }
 
 // ─── Zip skill audit limits ───────────────────────────────────────────────────
@@ -47,6 +50,11 @@ pub fn audit_skill_directory(skill_dir: &Path) -> Result<SkillAuditReport> {
     audit_skill_directory_with_options(skill_dir, SkillAuditOptions::default())
 }
 
+/// Audit a skill directory, optionally using a broader `audit_root` as the
+/// boundary for link validation.  When `options.audit_root` is `Some`, markdown links
+/// that resolve within that directory are accepted even if they leave the
+/// individual skill directory.  This is used for open-skills repositories
+/// where skills legitimately cross-reference each other.
 pub fn audit_skill_directory_with_options(
     skill_dir: &Path,
     options: SkillAuditOptions,
@@ -61,6 +69,15 @@ pub fn audit_skill_directory_with_options(
     let canonical_root = skill_dir
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", skill_dir.display()))?;
+
+    // Use the broader audit root for link checking if provided.
+    let link_root = match options.audit_root {
+        Some(r) => r
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize audit root {}", r.display()))?,
+        None => canonical_root.clone(),
+    };
+
     let mut report = SkillAuditReport::default();
 
     let has_manifest =
@@ -74,7 +91,7 @@ pub fn audit_skill_directory_with_options(
 
     for path in collect_paths_depth_first(&canonical_root)? {
         report.files_scanned += 1;
-        audit_path(&canonical_root, &path, &mut report, options)?;
+        audit_path(&link_root, &path, &mut report, options)?;
     }
 
     Ok(report)
