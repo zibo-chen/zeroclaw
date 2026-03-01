@@ -1329,6 +1329,16 @@ impl SecurityPolicy {
         // Expand "~" for consistent matching with forbidden paths and allowlists.
         let expanded_path = expand_user_path(path);
 
+        // Check allowed_roots first, before rejecting absolute paths under workspace_only.
+        // This allows explicitly allowed paths (e.g. session-attached files) to bypass
+        // the workspace_only restriction.
+        for root in &self.allowed_roots {
+            let root_expanded = expand_user_path(&root.to_string_lossy());
+            if expanded_path.starts_with(&root_expanded) {
+                return true;
+            }
+        }
+
         // Block absolute paths when workspace_only is set
         if self.workspace_only && expanded_path.is_absolute() {
             return false;
