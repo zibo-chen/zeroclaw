@@ -30,6 +30,7 @@ pub struct Agent {
     tool_dispatcher: Box<dyn ToolDispatcher>,
     memory_loader: Box<dyn MemoryLoader>,
     config: crate::config::AgentConfig,
+    autonomy_config: crate::config::AutonomyConfig,
     model_name: String,
     temperature: f64,
     workspace_dir: std::path::PathBuf,
@@ -53,6 +54,7 @@ pub struct AgentBuilder {
     tool_dispatcher: Option<Box<dyn ToolDispatcher>>,
     memory_loader: Option<Box<dyn MemoryLoader>>,
     config: Option<crate::config::AgentConfig>,
+    autonomy_config: Option<crate::config::AutonomyConfig>,
     model_name: Option<String>,
     temperature: Option<f64>,
     workspace_dir: Option<std::path::PathBuf>,
@@ -77,6 +79,7 @@ impl AgentBuilder {
             tool_dispatcher: None,
             memory_loader: None,
             config: None,
+            autonomy_config: None,
             model_name: None,
             temperature: None,
             workspace_dir: None,
@@ -128,6 +131,11 @@ impl AgentBuilder {
 
     pub fn config(mut self, config: crate::config::AgentConfig) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    pub fn autonomy_config(mut self, autonomy_config: crate::config::AutonomyConfig) -> Self {
+        self.autonomy_config = Some(autonomy_config);
         self
     }
 
@@ -220,6 +228,7 @@ impl AgentBuilder {
                 .memory_loader
                 .unwrap_or_else(|| Box::new(DefaultMemoryLoader::default())),
             config: self.config.unwrap_or_default(),
+            autonomy_config: self.autonomy_config.unwrap_or_default(),
             model_name: crate::config::resolve_default_model_id(self.model_name.as_deref(), None),
             temperature: self.temperature.unwrap_or(0.7),
             workspace_dir: self
@@ -271,6 +280,7 @@ impl Agent {
         &mut self,
         user_message: &str,
         on_delta: tokio::sync::mpsc::Sender<String>,
+        on_approval: Option<&super::loop_::OnApprovalFn>,
     ) -> Result<String> {
         use super::loop_::run_tool_call_loop;
         use crate::providers::ChatMessage as ProvChatMessage;
@@ -324,6 +334,16 @@ impl Agent {
 
         let effective_model = self.classify_model(user_message);
 
+        // When an approval callback is provided (desktop UI), create an
+        // ApprovalManager from the stored autonomy config so that
+        // `needs_approval()` is evaluated per tool call. Without the callback
+        // the manager would auto-approve, so we only create it when the
+        // desktop UI can actually prompt the user.
+        let approval_mgr = on_approval
+            .as_ref()
+            .map(|_| crate::approval::ApprovalManager::from_config(&self.autonomy_config));
+        let approval_ref = approval_mgr.as_ref();
+
         // Delegate to the existing run_tool_call_loop which already supports
         // on_delta streaming, tool approval, hooks, parallel tools etc.
         let result = run_tool_call_loop(
@@ -334,15 +354,16 @@ impl Agent {
             "", // provider_name (cosmetic, used for tracing)
             &effective_model,
             self.temperature,
-            true,      // silent — don't print to stdout
-            None,      // approval
-            "desktop", // channel_name
+            true,         // silent — don't print to stdout
+            approval_ref, // approval — only active when desktop UI provides callback
+            "desktop",    // channel_name
             &crate::config::MultimodalConfig::default(),
             self.config.max_tool_iterations,
             None, // cancellation_token
             Some(on_delta),
             None, // hooks
             &[],  // excluded_tools
+            on_approval,
         )
         .await;
 
@@ -454,6 +475,7 @@ impl Agent {
             )))
             .prompt_builder(SystemPromptBuilder::with_defaults())
             .config(config.agent.clone())
+            .autonomy_config(config.autonomy.clone())
             .model_name(model_name)
             .temperature(config.default_temperature)
             .workspace_dir(config.workspace_dir.clone())

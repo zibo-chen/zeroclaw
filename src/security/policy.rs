@@ -115,6 +115,8 @@ impl Clone for ActionTracker {
 #[derive(Debug, Clone)]
 pub struct SecurityPolicy {
     pub autonomy: AutonomyLevel,
+    /// When true, all security checks are bypassed.
+    pub trust_me: bool,
     pub workspace_dir: PathBuf,
     pub workspace_only: bool,
     pub allowed_commands: Vec<String>,
@@ -135,6 +137,7 @@ impl Default for SecurityPolicy {
     fn default() -> Self {
         Self {
             autonomy: AutonomyLevel::Supervised,
+            trust_me: false,
             workspace_dir: PathBuf::from("."),
             workspace_only: true,
             allowed_commands: vec![
@@ -1049,6 +1052,11 @@ impl SecurityPolicy {
         command: &str,
         approved: bool,
     ) -> Result<CommandRiskLevel, String> {
+        // Trust mode: skip all security checks (for desktop integration)
+        if self.trust_me {
+            return Ok(self.command_risk_level(command));
+        }
+
         let allowlist_eval = self
             .evaluate_command_allowlist(command)
             .map_err(|reason| format!("Command not allowed by security policy: {reason}"))?;
@@ -1106,6 +1114,10 @@ impl SecurityPolicy {
     /// - Blocks shell redirections (`<`, `>`, `>>`) that can bypass path policy
     /// - Blocks dangerous arguments (e.g. `find -exec`, `git config`)
     pub fn is_command_allowed(&self, command: &str) -> bool {
+        // Trust mode: allow all commands (for desktop integration)
+        if self.trust_me {
+            return true;
+        }
         self.evaluate_command_allowlist(command).is_ok()
     }
 
@@ -1231,6 +1243,9 @@ impl SecurityPolicy {
     /// This is best-effort token parsing for shell commands and is intended
     /// as a safety gate before command execution.
     pub fn forbidden_path_argument(&self, command: &str) -> Option<String> {
+        if self.trust_me {
+            return None;
+        }
         let forbidden_candidate = |raw: &str| {
             let candidate = strip_wrapping_quotes(raw).trim();
             if candidate.is_empty() || candidate.contains("://") {
@@ -1301,6 +1316,9 @@ impl SecurityPolicy {
 
     /// Check if a file path is allowed (no path traversal, within workspace)
     pub fn is_path_allowed(&self, path: &str) -> bool {
+        if self.trust_me {
+            return true;
+        }
         // Block null bytes (can truncate paths in C-backed syscalls)
         if path.contains('\0') {
             return false;
@@ -1358,6 +1376,9 @@ impl SecurityPolicy {
     /// Validate that a resolved path is inside the workspace or an allowed root.
     /// Call this AFTER joining `workspace_dir` + relative path and canonicalizing.
     pub fn is_resolved_path_allowed(&self, resolved: &Path) -> bool {
+        if self.trust_me {
+            return true;
+        }
         // Prefer canonical workspace root so `/a/../b` style config paths don't
         // cause false positives or negatives.
         let workspace_root = self
@@ -1412,6 +1433,9 @@ impl SecurityPolicy {
 
     /// Check if autonomy level permits any action at all
     pub fn can_act(&self) -> bool {
+        if self.trust_me {
+            return true;
+        }
         self.autonomy != AutonomyLevel::ReadOnly
     }
 
@@ -1429,6 +1453,9 @@ impl SecurityPolicy {
         operation: ToolOperation,
         operation_name: &str,
     ) -> Result<(), String> {
+        if self.trust_me {
+            return Ok(());
+        }
         match operation {
             ToolOperation::Read => Ok(()),
             ToolOperation::Act => {
@@ -1450,12 +1477,18 @@ impl SecurityPolicy {
     /// Record an action and check if the rate limit has been exceeded.
     /// Returns `true` if the action is allowed, `false` if rate-limited.
     pub fn record_action(&self) -> bool {
+        if self.trust_me {
+            return true;
+        }
         let count = self.tracker.record();
         count <= self.max_actions_per_hour as usize
     }
 
     /// Check if the rate limit would be exceeded without recording.
     pub fn is_rate_limited(&self) -> bool {
+        if self.trust_me {
+            return false;
+        }
         self.tracker.count() >= self.max_actions_per_hour as usize
     }
 
@@ -1534,7 +1567,12 @@ impl SecurityPolicy {
         workspace_dir: &Path,
     ) -> Self {
         Self {
-            autonomy: autonomy_config.level,
+            autonomy: if autonomy_config.trust_me {
+                AutonomyLevel::Full
+            } else {
+                autonomy_config.level
+            },
+            trust_me: autonomy_config.trust_me,
             workspace_dir: workspace_dir.to_path_buf(),
             workspace_only: autonomy_config.workspace_only,
             allowed_commands: autonomy_config.allowed_commands.clone(),

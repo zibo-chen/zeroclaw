@@ -27,9 +27,19 @@ use std::fmt::Write;
 use std::future::Future;
 use std::io::Write as _;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+
+/// Async callback for requesting tool approval from a non-CLI UI (e.g.
+/// desktop/Flutter). Given a tool name and its JSON arguments, returns
+/// the user's `ApprovalResponse`.
+pub type OnApprovalFn = Box<
+    dyn Fn(String, serde_json::Value) -> Pin<Box<dyn Future<Output = ApprovalResponse> + Send>>
+        + Send
+        + Sync,
+>;
 use uuid::Uuid;
 
 mod context;
@@ -912,6 +922,7 @@ pub(crate) async fn agent_turn(
         None,
         None,
         &[],
+        None,
     )
     .await
 }
@@ -1060,6 +1071,7 @@ pub async fn run_tool_call_loop(
     on_delta: Option<tokio::sync::mpsc::Sender<String>>,
     hooks: Option<&crate::hooks::HookRunner>,
     excluded_tools: &[String],
+    on_approval: Option<&OnApprovalFn>,
 ) -> Result<String> {
     let non_cli_approval_context = TOOL_LOOP_NON_CLI_APPROVAL_CONTEXT
         .try_with(Clone::clone)
@@ -1981,8 +1993,14 @@ pub async fn run_tool_call_loop(
                         arguments: tool_args.clone(),
                     };
 
+                    // CLI: prompt on stdin.
+                    // Desktop (or other channels with on_approval callback): async UI callback.
+                    // Non-CLI with approval context: use non-cli approval mechanism.
+                    // Fallback: auto-deny on channels without any UI.
                     let decision = if channel_name == "cli" {
                         mgr.prompt_cli(&request)
+                    } else if let Some(approval_fn) = on_approval {
+                        approval_fn(tool_name.clone(), tool_args.clone()).await
                     } else if let Some(ctx) = non_cli_approval_context.as_ref() {
                         let pending = mgr.create_non_cli_pending_request(
                             &tool_name,
@@ -2825,6 +2843,7 @@ pub async fn run(
                         None,
                         effective_hooks,
                         &[],
+                        None,
                     ),
                 ),
             ),
@@ -3010,6 +3029,7 @@ pub async fn run(
                             None,
                             effective_hooks,
                             &[],
+                            None,
                         ),
                     ),
                 ),
@@ -3799,6 +3819,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect_err("provider without vision support should fail");
@@ -3878,6 +3899,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect_err("oversized payload must fail");
@@ -3918,6 +3940,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("valid multimodal payload should pass");
@@ -4044,6 +4067,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("parallel execution should complete");
@@ -4431,6 +4455,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("loop should finish after deduplicating repeated calls");
@@ -4487,6 +4512,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("native fallback id flow should complete");

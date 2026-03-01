@@ -3408,6 +3408,11 @@ pub struct CommandContextRuleConfig {
 pub struct AutonomyConfig {
     /// Autonomy level: `read_only`, `supervised` (default), or `full`.
     pub level: AutonomyLevel,
+
+    /// Trust-me mode: when enabled, all security checks are bypassed and tool
+    /// calls are auto-approved without user confirmation. **Use with caution.**
+    #[serde(default)]
+    pub trust_me: bool,
     /// Restrict absolute filesystem paths to workspace-relative references. Default: `true`.
     /// Resolved paths outside the workspace still require `allowed_roots`.
     pub workspace_only: bool,
@@ -3567,6 +3572,7 @@ impl Default for AutonomyConfig {
     fn default() -> Self {
         Self {
             level: AutonomyLevel::Supervised,
+            trust_me: false,
             workspace_only: true,
             allowed_commands: vec![
                 "git".into(),
