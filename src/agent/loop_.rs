@@ -2001,6 +2001,12 @@ pub async fn run_tool_call_loop(
                         mgr.prompt_cli(&request)
                     } else if let Some(approval_fn) = on_approval {
                         approval_fn(tool_name.clone(), tool_args.clone()).await
+                    } else if let Some(approval_fn) = TOOL_LOOP_DESKTOP_APPROVAL
+                        .try_with(Clone::clone)
+                        .ok()
+                        .flatten()
+                    {
+                        approval_fn(tool_name.clone(), tool_args.clone()).await
                     } else if let Some(ctx) = non_cli_approval_context.as_ref() {
                         let pending = mgr.create_non_cli_pending_request(
                             &tool_name,
