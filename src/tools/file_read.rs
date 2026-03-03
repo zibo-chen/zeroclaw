@@ -146,7 +146,7 @@ impl Tool for FileReadTool {
         // Check file size AFTER canonicalization to prevent TOCTOU symlink bypass
         match tokio::fs::metadata(&resolved_path).await {
             Ok(meta) => {
-                if has_multiple_hard_links(&meta) {
+                if has_multiple_hard_links(&resolved_path) {
                     return Ok(ToolResult {
                         success: false,
                         output: String::new(),

@@ -310,6 +310,7 @@ fn replace_binary(new_binary: &Path, current_exe: &Path) -> Result<()> {
     // This avoids cross-filesystem rename failures (EXDEV) from temp dirs.
     #[cfg(unix)]
     {
+        use std::io::ErrorKind;
         use std::os::unix::fs::PermissionsExt;
 
         let parent = current_exe

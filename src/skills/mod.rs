@@ -256,7 +256,7 @@ fn load_skills_from_directory(
 
         match audit::audit_skill_directory_with_options(
             &path,
-            audit::SkillAuditOptions { allow_scripts, audit_root: None },
+            audit::SkillAuditOptions { allow_scripts },
         ) {
             Ok(report) if report.is_clean() => {}
             Ok(report) => {

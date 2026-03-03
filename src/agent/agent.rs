@@ -252,6 +252,7 @@ impl Agent {
         AgentBuilder::new()
     }
 
+    /// Return the tool specs registered with this agent (for dynamic UI listing).
     pub fn tool_specs(&self) -> &[ToolSpec] {
         &self.tool_specs
     }
@@ -262,11 +263,6 @@ impl Agent {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
-    }
-
-    /// Return the tool specs registered with this agent (for dynamic UI listing).
-    pub fn tool_specs(&self) -> &[ToolSpec] {
-        &self.tool_specs
     }
 
     /// Streaming turn: same as `turn()` but sends progress events through an

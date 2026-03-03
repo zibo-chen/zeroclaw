@@ -173,7 +173,7 @@ impl Tool for FileWriteTool {
                 });
             }
 
-            if has_multiple_hard_links(&meta) {
+            if has_multiple_hard_links(&resolved_target) {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),

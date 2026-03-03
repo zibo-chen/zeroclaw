@@ -361,7 +361,7 @@ impl Tool for FileEditTool {
                 });
             }
 
-            if has_multiple_hard_links(&meta) {
+            if has_multiple_hard_links(&resolved_target) {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
