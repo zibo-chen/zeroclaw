@@ -1,10 +1,12 @@
 use crate::multimodal;
 use crate::providers::traits::{
     ChatMessage, ChatRequest as ProviderChatRequest, ChatResponse as ProviderChatResponse,
-    NormalizedStopReason, Provider, ProviderCapabilities, TokenUsage, ToolCall as ProviderToolCall,
+    NormalizedStopReason, Provider, ProviderCapabilities, StreamChunk, StreamError, StreamOptions,
+    StreamResult, StreamToolCallDelta, TokenUsage, ToolCall as ProviderToolCall,
 };
 use crate::tools::ToolSpec;
 use async_trait::async_trait;
+use futures_util::{stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +22,8 @@ struct ChatRequest {
     temperature: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,6 +324,198 @@ impl OpenRouterProvider {
     fn http_client(&self) -> Client {
         crate::config::build_runtime_proxy_client_with_timeouts("provider.openrouter", 120, 10)
     }
+
+    fn stream_chat_messages(
+        &self,
+        messages: Vec<Message>,
+        model: &str,
+        temperature: f64,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+        let credential = match self.credential.as_ref() {
+            Some(value) => value.clone(),
+            None => {
+                return stream::once(async {
+                    Err(StreamError::Provider(
+                        "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."
+                            .to_string(),
+                    ))
+                })
+                .boxed();
+            }
+        };
+
+        let request = ChatRequest {
+            model: model.to_string(),
+            messages,
+            temperature,
+            max_tokens: self.max_tokens_override,
+            stream: Some(options.enabled),
+        };
+
+        let client = self.http_client();
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+
+        tokio::spawn(async move {
+            let response = match client
+                .post("https://openrouter.ai/api/v1/chat/completions")
+                .header("Authorization", format!("Bearer {credential}"))
+                .header(
+                    "HTTP-Referer",
+                    "https://github.com/theonlyhennygod/zeroclaw",
+                )
+                .header("X-Title", "ZeroClaw")
+                .header("Accept", "text/event-stream")
+                .json(&request)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Err(StreamError::Http(e))).await;
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let error = match response.text().await {
+                    Ok(e) => e,
+                    Err(_) => format!("HTTP error: {}", status),
+                };
+                let _ = tx
+                    .send(Err(StreamError::Provider(format!("{}: {}", status, error))))
+                    .await;
+                return;
+            }
+
+            let mut buffer = String::new();
+            let mut bytes_stream = response.bytes_stream();
+
+            while let Some(item) = bytes_stream.next().await {
+                let bytes = match item {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let _ = tx.send(Err(StreamError::Http(e))).await;
+                        return;
+                    }
+                };
+
+                let text = match String::from_utf8(bytes.to_vec()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(StreamError::InvalidSse(format!(
+                                "Invalid UTF-8: {}",
+                                e
+                            ))))
+                            .await;
+                        return;
+                    }
+                };
+
+                buffer.push_str(&text);
+                while let Some(pos) = buffer.find('\n') {
+                    let line = buffer[..pos].to_string();
+                    buffer = buffer[pos + 1..].to_string();
+
+                    match parse_openrouter_sse_line(&line) {
+                        Ok(chunks) => {
+                            for mut chunk in chunks {
+                                if options.count_tokens && !chunk.delta.is_empty() {
+                                    chunk = chunk.with_token_estimate();
+                                }
+                                if tx.send(Ok(chunk)).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                    }
+                }
+            }
+
+            let _ = tx.send(Ok(StreamChunk::final_chunk())).await;
+        });
+
+        stream::unfold(rx, |mut rx| async {
+            rx.recv().await.map(|chunk| (chunk, rx))
+        })
+        .boxed()
+    }
+}
+
+fn parse_openrouter_sse_line(line: &str) -> StreamResult<Vec<StreamChunk>> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with(':') {
+        return Ok(Vec::new());
+    }
+
+    let Some(data) = line.strip_prefix("data:") else {
+        return Ok(Vec::new());
+    };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Ok(Vec::new());
+    }
+
+    let value: serde_json::Value = serde_json::from_str(data).map_err(StreamError::Json)?;
+    let mut out = Vec::new();
+
+    if let Some(text) = value
+        .pointer("/choices/0/delta/content")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        out.push(StreamChunk::delta(text.to_string()));
+    }
+
+    if let Some(text) = value
+        .pointer("/choices/0/delta/reasoning_content")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        out.push(StreamChunk::delta(text.to_string()));
+    }
+
+    if let Some(tool_calls) = value
+        .pointer("/choices/0/delta/tool_calls")
+        .and_then(serde_json::Value::as_array)
+    {
+        for item in tool_calls {
+            let index = item
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as usize;
+            let id = item
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string);
+            let name = item
+                .pointer("/function/name")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string);
+            let arguments_delta = item
+                .pointer("/function/arguments")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
+
+            if id.is_some() || name.is_some() || arguments_delta.is_some() {
+                out.push(StreamChunk::tool_call_delta(StreamToolCallDelta {
+                    index,
+                    id,
+                    name,
+                    arguments_delta,
+                }));
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 #[async_trait]
@@ -374,6 +570,7 @@ impl Provider for OpenRouterProvider {
             messages,
             temperature,
             max_tokens: self.max_tokens_override,
+            stream: None,
         };
 
         let response = self
@@ -425,6 +622,7 @@ impl Provider for OpenRouterProvider {
             messages: api_messages,
             temperature,
             max_tokens: self.max_tokens_override,
+            stream: None,
         };
 
         let response = self
@@ -510,6 +708,53 @@ impl Provider for OpenRouterProvider {
 
     fn supports_native_tools(&self) -> bool {
         true
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn stream_chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+        let mut messages = Vec::new();
+
+        if let Some(sys) = system_prompt {
+            messages.push(Message {
+                role: "system".to_string(),
+                content: MessageContent::Text(sys.to_string()),
+            });
+        }
+
+        messages.push(Message {
+            role: "user".to_string(),
+            content: Self::to_message_content("user", message),
+        });
+
+        self.stream_chat_messages(messages, model, temperature, options)
+    }
+
+    fn stream_chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+        let api_messages: Vec<Message> = messages
+            .iter()
+            .map(|m| Message {
+                role: m.role.clone(),
+                content: Self::to_message_content(&m.role, &m.content),
+            })
+            .collect();
+
+        self.stream_chat_messages(api_messages, model, temperature, options)
     }
 
     async fn chat_with_tools(
@@ -687,6 +932,7 @@ mod tests {
             ],
             temperature: 0.5,
             max_tokens: None,
+            stream: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -721,6 +967,7 @@ mod tests {
                 .collect(),
             temperature: 0.0,
             max_tokens: None,
+            stream: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -739,6 +986,7 @@ mod tests {
             }],
             temperature: 0.2,
             max_tokens: Some(2048),
+            stream: None,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"max_tokens\":2048"));

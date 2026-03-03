@@ -9169,6 +9169,7 @@ impl Config {
             .ok()
             .as_deref()
             .and_then(parse_proxy_enabled);
+        let proxy_enabled_before_env = self.proxy.enabled;
         if let Some(enabled) = explicit_proxy_enabled {
             self.proxy.enabled = enabled;
         }
@@ -9200,6 +9201,7 @@ impl Config {
         }
 
         if explicit_proxy_enabled.is_none()
+            && proxy_enabled_before_env
             && proxy_url_overridden
             && self.proxy.has_any_proxy_url()
         {

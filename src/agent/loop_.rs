@@ -14,6 +14,7 @@ use crate::security::SecurityPolicy;
 use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
+use futures_util::StreamExt;
 use regex::{Regex, RegexSet};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
@@ -1389,23 +1390,128 @@ pub async fn run_tool_call_loop(
             hooks.fire_llm_input(history, active_model.as_str()).await;
         }
 
-        let chat_future = provider.chat(
-            ChatRequest {
-                messages: &request_messages,
-                tools: request_tools,
-            },
-            active_model.as_str(),
-            temperature,
-        );
+        let mut used_provider_streaming = false;
+        let chat_result: anyhow::Result<crate::providers::ChatResponse> =
+            if on_delta.is_some() && provider.supports_streaming() {
+                used_provider_streaming = true;
 
-        let chat_result = if let Some(token) = cancellation_token.as_ref() {
-            tokio::select! {
-                () = token.cancelled() => return Err(ToolLoopCancelled.into()),
-                result = chat_future => result,
-            }
-        } else {
-            chat_future.await
-        };
+                let mut stream_messages = request_messages.clone();
+                if !tool_specs.is_empty() {
+                    let tool_instructions =
+                        crate::providers::traits::build_tool_instructions_text(&tool_specs);
+                    if let Some(system_message) =
+                        stream_messages.iter_mut().find(|m| m.role == "system")
+                    {
+                        if !system_message.content.is_empty() {
+                            system_message.content.push_str("\n\n");
+                        }
+                        system_message.content.push_str(&tool_instructions);
+                    } else {
+                        stream_messages.insert(0, ChatMessage::system(tool_instructions));
+                    }
+                }
+
+                let mut stream = provider.stream_chat_with_history(
+                    &stream_messages,
+                    active_model.as_str(),
+                    temperature,
+                    crate::providers::traits::StreamOptions::new(true),
+                );
+                let mut streamed_text = String::new();
+                let mut streamed_tool_calls: std::collections::BTreeMap<
+                    usize,
+                    (Option<String>, Option<String>, String),
+                > = std::collections::BTreeMap::new();
+
+                loop {
+                    let next_chunk = if let Some(token) = cancellation_token.as_ref() {
+                        tokio::select! {
+                            () = token.cancelled() => return Err(ToolLoopCancelled.into()),
+                            chunk = stream.next() => chunk,
+                        }
+                    } else {
+                        stream.next().await
+                    };
+
+                    let Some(chunk) = next_chunk else {
+                        break;
+                    };
+
+                    match chunk {
+                        Ok(chunk) => {
+                            if chunk.is_final {
+                                break;
+                            }
+
+                            if let Some(tc_delta) = chunk.tool_call_delta {
+                                let entry = streamed_tool_calls.entry(tc_delta.index).or_insert((
+                                    None,
+                                    None,
+                                    String::new(),
+                                ));
+                                if tc_delta.id.is_some() {
+                                    entry.0 = tc_delta.id;
+                                }
+                                if tc_delta.name.is_some() {
+                                    entry.1 = tc_delta.name;
+                                }
+                                if let Some(arguments_delta) = tc_delta.arguments_delta {
+                                    entry.2.push_str(&arguments_delta);
+                                }
+                            }
+
+                            if !chunk.delta.is_empty() {
+                                streamed_text.push_str(&chunk.delta);
+                                if let Some(ref tx) = on_delta {
+                                    let _ = tx.send(chunk.delta).await;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let safe_error = providers::sanitize_api_error(&e.to_string());
+                            return Err(anyhow::anyhow!(safe_error));
+                        }
+                    }
+                }
+
+                let tool_calls = streamed_tool_calls
+                    .into_iter()
+                    .filter_map(|(_, (id, name, arguments))| {
+                        let name = name?;
+                        Some(crate::providers::ToolCall {
+                            id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                            name,
+                            arguments,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                Ok(crate::providers::ChatResponse {
+                    text: Some(streamed_text),
+                    tool_calls,
+                    usage: None,
+                    reasoning_content: None,
+                    quota_metadata: None,
+                })
+            } else {
+                let chat_future = provider.chat(
+                    ChatRequest {
+                        messages: &request_messages,
+                        tools: request_tools,
+                    },
+                    active_model.as_str(),
+                    temperature,
+                );
+
+                if let Some(token) = cancellation_token.as_ref() {
+                    tokio::select! {
+                        () = token.cancelled() => return Err(ToolLoopCancelled.into()),
+                        result = chat_future => result,
+                    }
+                } else {
+                    chat_future.await
+                }
+            };
 
         let (
             response_text,
@@ -1414,6 +1520,7 @@ pub async fn run_tool_call_loop(
             assistant_history_content,
             native_tool_calls,
             parse_issue_detected,
+            used_provider_streaming,
         ) = match chat_result {
             Ok(resp) => {
                 let mut response_text = resp.text_or_empty().to_string();
@@ -1701,6 +1808,7 @@ pub async fn run_tool_call_loop(
                     assistant_history_content,
                     native_calls,
                     parse_issue.is_some(),
+                    used_provider_streaming,
                 )
             }
             Err(e) => {
@@ -1832,6 +1940,10 @@ pub async fn run_tool_call_loop(
             // If a streaming sender is provided, relay the text in small chunks
             // so the channel can progressively update the draft message.
             if let Some(ref tx) = on_delta {
+                if used_provider_streaming {
+                    history.push(ChatMessage::assistant(response_text.clone()));
+                    return Ok(display_text);
+                }
                 // Clear accumulated progress lines before streaming the final answer.
                 let _ = tx.send(DRAFT_CLEAR_SENTINEL.to_string()).await;
                 // Split on whitespace boundaries, accumulating chunks of at least

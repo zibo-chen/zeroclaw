@@ -200,10 +200,22 @@ pub enum ConversationMessage {
 pub struct StreamChunk {
     /// Text delta for this chunk.
     pub delta: String,
+    /// Native tool-call delta for this chunk, when provider emits structured
+    /// tool-calling events over streaming SSE.
+    pub tool_call_delta: Option<StreamToolCallDelta>,
     /// Whether this is the final chunk.
     pub is_final: bool,
     /// Approximate token count for this chunk (estimated).
     pub token_count: usize,
+}
+
+/// Incremental native tool-call payload from a streaming provider.
+#[derive(Debug, Clone)]
+pub struct StreamToolCallDelta {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub arguments_delta: Option<String>,
 }
 
 impl StreamChunk {
@@ -211,6 +223,17 @@ impl StreamChunk {
     pub fn delta(text: impl Into<String>) -> Self {
         Self {
             delta: text.into(),
+            tool_call_delta: None,
+            is_final: false,
+            token_count: 0,
+        }
+    }
+
+    /// Create a non-final chunk carrying native tool-call delta.
+    pub fn tool_call_delta(delta: StreamToolCallDelta) -> Self {
+        Self {
+            delta: String::new(),
+            tool_call_delta: Some(delta),
             is_final: false,
             token_count: 0,
         }
@@ -220,6 +243,7 @@ impl StreamChunk {
     pub fn final_chunk() -> Self {
         Self {
             delta: String::new(),
+            tool_call_delta: None,
             is_final: true,
             token_count: 0,
         }
@@ -229,6 +253,7 @@ impl StreamChunk {
     pub fn error(message: impl Into<String>) -> Self {
         Self {
             delta: message.into(),
+            tool_call_delta: None,
             is_final: true,
             token_count: 0,
         }
