@@ -1574,12 +1574,22 @@ impl OpenAiCompatibleProvider {
             items
                 .iter()
                 .map(|tool| {
+                    // Clean parameters schema for cross-provider compatibility.
+                    // Many OpenAI-compatible providers reject non-standard JSON
+                    // Schema keywords (`oneOf`, `type` arrays, `minimum`,
+                    // `minLength`, `default`, etc.) that upstream tools may emit.
+                    // Use Gemini strategy (strictest) to maximise compatibility
+                    // across the wide range of endpoints behind this adapter.
+                    let cleaned_parameters = crate::tools::schema::SchemaCleanr::clean(
+                        tool.parameters.clone(),
+                        crate::tools::schema::CleaningStrategy::Gemini,
+                    );
                     serde_json::json!({
                         "type": "function",
                         "function": {
                             "name": tool.name,
                             "description": tool.description,
-                            "parameters": tool.parameters,
+                            "parameters": cleaned_parameters,
                         }
                     })
                 })
@@ -2524,10 +2534,21 @@ impl Provider for OpenAiCompatibleProvider {
             // Set accept header for streaming
             req_builder = req_builder.header("Accept", "text/event-stream");
 
+            tracing::info!(
+                url = %url,
+                model = %request.model,
+                "Starting streaming HTTP request"
+            );
+
             // Send request
             let response = match req_builder.send().await {
                 Ok(r) => r,
                 Err(e) => {
+                    tracing::info!(
+                        url = %url,
+                        error = %e,
+                        "HTTP request failed to send"
+                    );
                     let _ = tx.send(Err(StreamError::Http(e))).await;
                     return;
                 }
@@ -2540,11 +2561,23 @@ impl Provider for OpenAiCompatibleProvider {
                     Ok(e) => e,
                     Err(_) => format!("HTTP error: {}", status),
                 };
+                tracing::info!(
+                    url = %url,
+                    status = %status,
+                    error = %error,
+                    "Streaming HTTP request failed with non-success status"
+                );
                 let _ = tx
                     .send(Err(StreamError::Provider(format!("{}: {}", status, error))))
                     .await;
                 return;
             }
+
+            tracing::info!(
+                url = %url,
+                status = %response.status(),
+                "Streaming HTTP request successful, starting to receive SSE chunks"
+            );
 
             // Convert to chunk stream and forward to channel
             let mut chunk_stream = sse_bytes_to_chunks(response, options.count_tokens);
@@ -2556,6 +2589,123 @@ impl Provider for OpenAiCompatibleProvider {
         });
 
         // Convert channel receiver to stream
+        stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|chunk| (chunk, rx))
+        })
+        .boxed()
+    }
+
+    fn stream_chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+        let credential = match self.credential.as_ref() {
+            Some(value) => value.clone(),
+            None => {
+                let provider_name = self.name.clone();
+                return stream::once(async move {
+                    Err(StreamError::Provider(format!(
+                        "{} API key not set",
+                        provider_name
+                    )))
+                })
+                .boxed();
+            }
+        };
+
+        // Convert ChatMessage to API Message format, preserving full history
+        let api_messages: Vec<Message> = messages
+            .iter()
+            .map(|m| Message {
+                role: m.role.clone(),
+                content: MessageContent::Text(m.content.clone()),
+            })
+            .collect();
+
+        let request = ApiChatRequest {
+            model: model.to_string(),
+            messages: api_messages,
+            temperature,
+            max_tokens: self.effective_max_tokens(),
+            stream: Some(options.enabled),
+            tools: None,
+            tool_choice: None,
+        };
+
+        let url = self.chat_completions_url();
+        let client = self.http_client();
+        let auth_header = self.auth_header.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+
+        tokio::spawn(async move {
+            let mut req_builder = client.post(&url).json(&request);
+
+            req_builder = match &auth_header {
+                AuthStyle::Bearer => {
+                    req_builder.header("Authorization", format!("Bearer {}", credential))
+                }
+                AuthStyle::XApiKey => req_builder.header("x-api-key", &credential),
+                AuthStyle::Custom(header) => req_builder.header(header, &credential),
+            };
+
+            req_builder = req_builder.header("Accept", "text/event-stream");
+
+            tracing::info!(
+                url = %url,
+                model = %request.model,
+                message_count = request.messages.len(),
+                "Starting streaming HTTP request with full history"
+            );
+
+            let response = match req_builder.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::info!(
+                        url = %url,
+                        error = %e,
+                        "HTTP request failed to send"
+                    );
+                    let _ = tx.send(Err(StreamError::Http(e))).await;
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let error = match response.text().await {
+                    Ok(e) => e,
+                    Err(_) => format!("HTTP error: {}", status),
+                };
+                tracing::info!(
+                    url = %url,
+                    status = %status,
+                    error = %error,
+                    "Streaming HTTP request failed with non-success status"
+                );
+                let _ = tx
+                    .send(Err(StreamError::Provider(format!("{}: {}", status, error))))
+                    .await;
+                return;
+            }
+
+            tracing::info!(
+                url = %url,
+                status = %response.status(),
+                "Streaming HTTP request successful, starting to receive SSE chunks"
+            );
+
+            let mut chunk_stream = sse_bytes_to_chunks(response, options.count_tokens);
+            while let Some(chunk) = chunk_stream.next().await {
+                if tx.send(chunk).await.is_err() {
+                    break;
+                }
+            }
+        });
+
         stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|chunk| (chunk, rx))
         })

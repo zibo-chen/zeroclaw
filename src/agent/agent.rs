@@ -324,6 +324,20 @@ impl Agent {
             .collect();
         chat_history.push(ProvChatMessage::user(enriched.clone()));
 
+        tracing::info!(
+            history_len = self.history.len(),
+            chat_history_len = chat_history.len(),
+            "turn_streaming: before run_tool_call_loop"
+        );
+        for (i, msg) in chat_history.iter().enumerate() {
+            tracing::debug!(
+                idx = i,
+                role = %msg.role,
+                content_preview = %msg.content.chars().take(100).collect::<String>(),
+                "turn_streaming: chat_history message"
+            );
+        }
+
         // Also push the user message into our structured history.
         self.history
             .push(ConversationMessage::Chat(ProvChatMessage::user(enriched)));
@@ -371,9 +385,29 @@ impl Agent {
             .iter()
             .filter(|cm| matches!(cm, ConversationMessage::Chat(_)))
             .count();
+        let chat_history_len_after = chat_history.len();
+        let new_messages_count = chat_history_len_after.saturating_sub(existing_chat_count);
+        tracing::info!(
+            existing_chat_count = existing_chat_count,
+            chat_history_len_after = chat_history_len_after,
+            new_messages_count = new_messages_count,
+            "turn_streaming: after run_tool_call_loop, syncing history"
+        );
+        for (i, msg) in chat_history.iter().skip(existing_chat_count).enumerate() {
+            tracing::debug!(
+                idx = i,
+                role = %msg.role,
+                content_preview = %msg.content.chars().take(100).collect::<String>(),
+                "turn_streaming: adding new message to history"
+            );
+        }
         for msg in chat_history.into_iter().skip(existing_chat_count) {
             self.history.push(ConversationMessage::Chat(msg));
         }
+        tracing::info!(
+            final_history_len = self.history.len(),
+            "turn_streaming: history sync complete"
+        );
         self.trim_history();
 
         result

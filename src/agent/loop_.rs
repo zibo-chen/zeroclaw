@@ -12,7 +12,7 @@ use crate::providers::{
 use crate::runtime;
 use crate::security::SecurityPolicy;
 use crate::tools::{self, Tool};
-use crate::util::truncate_with_ellipsis;
+use crate::util::{floor_utf8_char_boundary, truncate_with_ellipsis};
 use anyhow::Result;
 use futures_util::StreamExt;
 use regex::{Regex, RegexSet};
@@ -214,12 +214,14 @@ static DEFERRED_ACTION_WITHOUT_TOOL_CALL_REGEX: LazyLock<Regex> = LazyLock::new(
 
 /// Detect common CJK deferred-action phrases (e.g., Chinese "让我…查看")
 /// that imply a follow-up tool call should occur.
-static CJK_DEFERRED_ACTION_CUE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(让我|我来|我会|我们来|我们会|我先|先让我|马上)").unwrap());
-
-/// Action verbs commonly used when promising to perform tool-backed work in CJK text.
-static CJK_DEFERRED_ACTION_VERB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(查看|检查|搜索|查找|浏览|打开|读取|写入|运行|执行|调用|分析|验证|列出|获取|尝试|试试|继续|处理|修复|看看|看一看|看一下)").unwrap()
+///
+/// This regex requires:
+/// 1. A cue phrase (让我/我来/etc.) immediately followed by
+/// 2. An action verb (查看/检查/etc.) within 30 characters
+/// 3. The phrase must appear at the end of text (within last 80 chars) to avoid
+///    matching incidental phrases in the middle of a complete response.
+static CJK_DEFERRED_ACTION_COMBINED_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(让我|我来|我会|我们来|我们会|我先|先让我|马上|现在|接下来|首先)[^。！？\n]{0,30}(查看|检查|搜索|查找|浏览|打开|读取|写入|运行|执行|调用|分析|验证|列出|获取|尝试|处理|修复)(一下|看看|文件|代码|内容|数据|结果|情况|目录|配置)?").unwrap()
 });
 
 /// Fast check for CJK scripts (Han/Hiragana/Katakana/Hangul) so we only run
@@ -566,9 +568,29 @@ fn truncate_tool_args_for_progress(name: &str, args: &serde_json::Value, max_len
     }
 }
 
+fn truncate_tool_result_preview(output: &str, max_bytes: usize) -> String {
+    if output.len() <= max_bytes {
+        return output.to_string();
+    }
+
+    let cutoff = floor_utf8_char_boundary(output, max_bytes);
+    format!("{}…(truncated)", &output[..cutoff])
+}
+
+/// Minimum response length (in chars) that signals a substantive answer.
+/// If the response is longer than this, we assume it's a complete reply
+/// even if it contains deferred-action-like phrases.
+const SUBSTANTIVE_RESPONSE_THRESHOLD: usize = 300;
+
 fn looks_like_deferred_action_without_tool_call(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
+        return false;
+    }
+
+    // If the response is long enough, treat it as a substantive answer
+    // and don't trigger retry based on incidental deferred-action phrases.
+    if trimmed.chars().count() > SUBSTANTIVE_RESPONSE_THRESHOLD {
         return false;
     }
 
@@ -576,9 +598,26 @@ fn looks_like_deferred_action_without_tool_call(text: &str) -> bool {
         return true;
     }
 
-    CJK_SCRIPT_REGEX.is_match(trimmed)
-        && CJK_DEFERRED_ACTION_CUE_REGEX.is_match(trimmed)
-        && CJK_DEFERRED_ACTION_VERB_REGEX.is_match(trimmed)
+    // For CJK text, check if deferred action appears near the end of text
+    // (last 80 chars) to avoid false positives from complete answers.
+    if CJK_SCRIPT_REGEX.is_match(trimmed) {
+        let char_count = trimmed.chars().count();
+        let check_region = if char_count > 80 {
+            // Find the byte index of the character 80 positions from the end
+            let skip_chars = char_count.saturating_sub(80);
+            let byte_offset = trimmed
+                .char_indices()
+                .nth(skip_chars)
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            &trimmed[byte_offset..]
+        } else {
+            trimmed
+        };
+        return CJK_DEFERRED_ACTION_COMBINED_REGEX.is_match(check_region);
+    }
+
+    false
 }
 
 fn merge_continuation_text(existing: &str, next: &str) -> String {
@@ -1196,6 +1235,23 @@ pub async fn run_tool_call_loop(
         };
 
         // ── Progress: LLM thinking ────────────────────────────
+        tracing::info!(
+            model = %active_model,
+            iteration = iteration + 1,
+            max_iterations = max_iterations,
+            history_len = history.len(),
+            request_messages_len = request_messages.len(),
+            "Starting LLM call iteration"
+        );
+        // Log message roles for debugging context continuity
+        if iteration > 0 {
+            let roles: Vec<&str> = request_messages.iter().map(|m| m.role.as_str()).collect();
+            tracing::debug!(
+                iteration = iteration + 1,
+                message_roles = ?roles,
+                "Request message roles for this iteration"
+            );
+        }
         if should_emit_verbose_progress(progress_mode) {
             if let Some(ref tx) = on_delta {
                 let phase = if iteration == 0 {
@@ -1471,6 +1527,13 @@ pub async fn run_tool_call_loop(
                         }
                         Err(e) => {
                             let safe_error = providers::sanitize_api_error(&e.to_string());
+                            tracing::info!(
+                                model = %active_model,
+                                iteration = iteration + 1,
+                                streamed_chars = streamed_text.len(),
+                                error = %safe_error,
+                                "Streaming error occurred after partial output"
+                            );
                             return Err(anyhow::anyhow!(safe_error));
                         }
                     }
@@ -1865,6 +1928,10 @@ pub async fn run_tool_call_loop(
         }
 
         if tool_calls.is_empty() {
+            tracing::info!(
+                iteration = iteration + 1,
+                "No tool calls in response, checking if turn should complete"
+            );
             let missing_tool_call_signal =
                 parse_issue_detected || looks_like_deferred_action_without_tool_call(&display_text);
             let missing_tool_call_followthrough = !missing_tool_call_retry_used
@@ -1943,6 +2010,11 @@ pub async fn run_tool_call_loop(
             // No tool calls — this is the final response.
             // If a streaming sender is provided, relay the text in small chunks
             // so the channel can progressively update the draft message.
+            tracing::info!(
+                iteration = iteration + 1,
+                response_chars = display_text.len(),
+                "Turn complete, returning final response"
+            );
             if let Some(ref tx) = on_delta {
                 if used_provider_streaming {
                     history.push(ChatMessage::assistant(response_text.clone()));
@@ -1973,6 +2045,15 @@ pub async fn run_tool_call_loop(
             }
             history.push(ChatMessage::assistant(response_text.clone()));
             return Ok(display_text);
+        }
+
+        // Tool calls detected — clear any streamed content that may include raw
+        // <tool_call> tags before proceeding with tool execution. The UI should
+        // show only the tool-call widgets, not the raw XML/JSON markup.
+        if used_provider_streaming {
+            if let Some(ref tx) = on_delta {
+                let _ = tx.send(DRAFT_CLEAR_SENTINEL.to_string()).await;
+            }
         }
 
         // Print any text the LLM produced alongside tool calls (unless silent)
@@ -2250,6 +2331,17 @@ pub async fn run_tool_call_loop(
             progress_indices.push(progress_idx);
         }
 
+        // Log tools to be executed
+        if !executable_calls.is_empty() {
+            let tool_names: Vec<&str> = executable_calls.iter().map(|c| c.name.as_str()).collect();
+            tracing::info!(
+                iteration = iteration + 1,
+                tool_count = executable_calls.len(),
+                tools = ?tool_names,
+                "Executing tool calls"
+            );
+        }
+
         let executed_outcomes = if allow_parallel_execution && executable_calls.len() > 1 {
             execute_tools_parallel(
                 &executable_calls,
@@ -2335,11 +2427,7 @@ pub async fn run_tool_call_loop(
 
                     // Send structured tool result for rich consumers (e.g. desktop UI).
                     // Format: \x01TOOL_RESULT\x02name\x02success\x02output\x01
-                    let result_preview = if outcome.output.len() > 4000 {
-                        format!("{}…(truncated)", &outcome.output[..4000])
-                    } else {
-                        outcome.output.clone()
-                    };
+                    let result_preview = truncate_tool_result_preview(&outcome.output, 4000);
                     let _ = tx
                         .send(format!(
                             "\x01TOOL_RESULT\x02{}\x02{}\x02{}\x01",
@@ -2373,6 +2461,12 @@ pub async fn run_tool_call_loop(
         // Native mode: use JSON-structured messages so convert_messages() can
         // reconstruct proper OpenAI-format tool_calls and tool result messages.
         // Prompt mode: use XML-based text format as before.
+        tracing::info!(
+            iteration = iteration + 1,
+            tool_results_count = individual_results.len(),
+            history_len_before = history.len(),
+            "Adding assistant message and tool results to history"
+        );
         history.push(ChatMessage::assistant(assistant_history_content));
         if native_tool_calls.is_empty() {
             let all_results_have_ids = use_native_tools
@@ -2402,6 +2496,12 @@ pub async fn run_tool_call_loop(
                 history.push(ChatMessage::tool(tool_msg.to_string()));
             }
         }
+
+        tracing::info!(
+            iteration = iteration + 1,
+            history_len_after = history.len(),
+            "Tool results added to history, continuing to next iteration"
+        );
 
         // ── Loop detection: check verdict ────────────────────────
         match loop_detector.check() {
@@ -3495,6 +3595,22 @@ mod tests {
         let scrubbed = scrub_credentials(input);
         assert!(scrubbed.contains("\"api_key\": \"sk-1*[REDACTED]\""));
         assert!(scrubbed.contains("public"));
+    }
+
+    #[test]
+    fn truncate_tool_result_preview_handles_multibyte_boundary_safely() {
+        let input = "a".repeat(3999) + "读";
+        let result = truncate_tool_result_preview(&input, 4000);
+
+        assert_eq!(result, format!("{}…(truncated)", "a".repeat(3999)));
+    }
+
+    #[test]
+    fn truncate_tool_result_preview_leaves_short_output_unchanged() {
+        let input = "hello";
+        let result = truncate_tool_result_preview(input, 4000);
+
+        assert_eq!(result, input);
     }
 
     #[test]
@@ -6204,6 +6320,29 @@ Done."#;
         ));
         assert!(!looks_like_deferred_action_without_tool_call(
             "最新结果已经在上面整理完成。"
+        ));
+    }
+
+    #[test]
+    fn looks_like_deferred_action_skips_long_responses() {
+        // A long response (>300 chars) should NOT trigger retry, even if it
+        // contains deferred-action phrases. This prevents false positives
+        // when the LLM provides a substantive answer that happens to include
+        // common phrases like "让我" or "I'll check".
+        let long_chinese =
+            "这是一个非常详细的回答，包含了很多有用的信息。".repeat(10) + "让我查看一下文件内容。";
+        assert!(!looks_like_deferred_action_without_tool_call(&long_chinese));
+
+        let long_english = "Here is a comprehensive explanation of the topic. ".repeat(10)
+            + "Let me check the results.";
+        assert!(!looks_like_deferred_action_without_tool_call(&long_english));
+    }
+
+    #[test]
+    fn cjk_deferred_action_requires_combined_pattern() {
+        // Just having "让我" or "查看" alone is not enough; they must be close together
+        assert!(!looks_like_deferred_action_without_tool_call(
+            "这是查看结果。让我总结一下。" // "查看" and "让我" are separate
         ));
     }
 

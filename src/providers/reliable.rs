@@ -904,6 +904,11 @@ impl Provider for ReliableProvider {
 
             // For streaming, we attempt once and propagate errors
             // The caller can retry the entire request if needed
+            tracing::info!(
+                provider = provider_name,
+                model = %current_model,
+                "Starting streaming request"
+            );
             let stream = provider.stream_chat_with_system(
                 system_prompt,
                 message,
@@ -917,21 +922,133 @@ impl Provider for ReliableProvider {
 
             tokio::spawn(async move {
                 let mut stream = stream;
+                let mut chunk_count: usize = 0;
                 while let Some(chunk) = stream.next().await {
                     if let Err(ref e) = chunk {
+                        tracing::info!(
+                            provider = provider_clone,
+                            model = current_model,
+                            chunks_received = chunk_count,
+                            "Streaming ended with error after receiving chunks"
+                        );
                         tracing::warn!(
                             provider = provider_clone,
                             model = current_model,
                             "Streaming error: {e}"
                         );
+                    } else {
+                        chunk_count += 1;
                     }
                     if tx.send(chunk).await.is_err() {
+                        tracing::info!(
+                            provider = provider_clone,
+                            model = current_model,
+                            chunks_received = chunk_count,
+                            "Stream receiver dropped"
+                        );
                         break; // Receiver dropped
                     }
                 }
+                tracing::info!(
+                    provider = provider_clone,
+                    model = current_model,
+                    chunks_received = chunk_count,
+                    "Streaming completed"
+                );
             });
 
             // Convert channel receiver to stream
+            return stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|chunk| (chunk, rx))
+            })
+            .boxed();
+        }
+
+        // No streaming support available
+        stream::once(async move {
+            Err(super::traits::StreamError::Provider(
+                "No provider supports streaming".to_string(),
+            ))
+        })
+        .boxed()
+    }
+
+    fn stream_chat_with_history(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        options: StreamOptions,
+    ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
+        // Try each provider/model combination for streaming with full history
+        for (provider_index, (provider_name, provider)) in self.providers.iter().enumerate() {
+            if !provider.supports_streaming() || !options.enabled {
+                continue;
+            }
+
+            let provider_clone = provider_name.clone();
+
+            let base_model = match self.model_chain(model).first() {
+                Some(m) => *m,
+                None => model,
+            };
+            let current_model = self
+                .provider_model_chain(base_model, provider_name, provider_index == 0)
+                .first()
+                .copied()
+                .unwrap_or(base_model)
+                .to_string();
+
+            tracing::info!(
+                provider = provider_name,
+                model = %current_model,
+                message_count = messages.len(),
+                "Starting streaming request with full history"
+            );
+
+            // Call the underlying provider's stream_chat_with_history
+            let stream =
+                provider.stream_chat_with_history(messages, &current_model, temperature, options);
+
+            let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+
+            tokio::spawn(async move {
+                let mut stream = stream;
+                let mut chunk_count: usize = 0;
+                while let Some(chunk) = stream.next().await {
+                    if let Err(ref e) = chunk {
+                        tracing::info!(
+                            provider = provider_clone,
+                            model = current_model,
+                            chunks_received = chunk_count,
+                            "Streaming ended with error after receiving chunks"
+                        );
+                        tracing::warn!(
+                            provider = provider_clone,
+                            model = current_model,
+                            "Streaming error: {e}"
+                        );
+                    } else {
+                        chunk_count += 1;
+                    }
+                    if tx.send(chunk).await.is_err() {
+                        tracing::info!(
+                            provider = provider_clone,
+                            model = current_model,
+                            chunks_received = chunk_count,
+                            "Stream receiver dropped"
+                        );
+                        break;
+                    }
+                }
+                tracing::info!(
+                    provider = provider_clone,
+                    model = current_model,
+                    chunks_received = chunk_count,
+                    "Streaming completed"
+                );
+            });
+
             return stream::unfold(rx, |mut rx| async move {
                 rx.recv().await.map(|chunk| (chunk, rx))
             })
