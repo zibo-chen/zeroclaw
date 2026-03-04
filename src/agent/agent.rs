@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 
@@ -276,6 +277,7 @@ impl Agent {
         &mut self,
         user_message: &str,
         on_delta: tokio::sync::mpsc::Sender<String>,
+        cancellation_token: Option<CancellationToken>,
         on_approval: Option<&super::loop_::OnApprovalFn>,
     ) -> Result<String> {
         use super::loop_::run_tool_call_loop;
@@ -369,7 +371,7 @@ impl Agent {
             "desktop",    // channel_name
             &crate::config::MultimodalConfig::default(),
             self.config.max_tool_iterations,
-            None, // cancellation_token
+            cancellation_token,
             Some(on_delta),
             None, // hooks
             &[],  // excluded_tools

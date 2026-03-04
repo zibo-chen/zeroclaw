@@ -5,6 +5,7 @@ use crate::cron::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use directories::UserDirs;
 use rusqlite::types::{FromSqlResult, ValueRef};
 use rusqlite::{params, Connection};
 use uuid::Uuid;
@@ -514,7 +515,20 @@ fn add_column_if_missing(conn: &Connection, name: &str, sql_type: &str) -> Resul
 }
 
 fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let db_path = config.workspace_dir.join("cron").join("jobs.db");
+    // Cron jobs use a global database path, not session-specific workspace.
+    // This ensures jobs created in any session are visible globally.
+    let db_path = if config.workspace_dir.to_string_lossy().contains("/session/") {
+        // Session-specific workspace detected, use global cron path instead
+        UserDirs::new()
+            .map(|u| u.home_dir().to_path_buf())
+            .unwrap_or_default()
+            .join(".zeroclaw")
+            .join("workspace")
+            .join("cron")
+            .join("jobs.db")
+    } else {
+        config.workspace_dir.join("cron").join("jobs.db")
+    };
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create cron directory: {}", parent.display()))?;
@@ -542,7 +556,8 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
             next_run         TEXT NOT NULL,
             last_run         TEXT,
             last_status      TEXT,
-            last_output      TEXT
+            last_output      TEXT,
+            target_session_id TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_cron_jobs_next_run ON cron_jobs(next_run);
 
@@ -571,6 +586,7 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
     add_column_if_missing(&conn, "enabled", "INTEGER NOT NULL DEFAULT 1")?;
     add_column_if_missing(&conn, "delivery", "TEXT")?;
     add_column_if_missing(&conn, "delete_after_run", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(&conn, "target_session_id", "TEXT")?;
 
     f(&conn)
 }
