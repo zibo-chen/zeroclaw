@@ -3028,6 +3028,11 @@ pub struct MemoryConfig {
     /// Embedding vector dimensions
     #[serde(default = "default_embedding_dims")]
     pub embedding_dimensions: usize,
+    /// API key for the embedding provider. If set, this takes precedence over
+    /// the top-level `api_key` for embedding operations, allowing independent
+    /// configuration of embedding and LLM providers.
+    #[serde(default)]
+    pub embedding_api_key: Option<String>,
     /// Weight for vector similarity in hybrid search (0.0–1.0)
     #[serde(default = "default_vector_weight")]
     pub vector_weight: f64,
@@ -3158,6 +3163,7 @@ impl Default for MemoryConfig {
             embedding_provider: default_embedding_provider(),
             embedding_model: default_embedding_model(),
             embedding_dimensions: default_embedding_dims(),
+            embedding_api_key: None,
             vector_weight: default_vector_weight(),
             keyword_weight: default_keyword_weight(),
             min_relevance_score: default_min_relevance_score(),

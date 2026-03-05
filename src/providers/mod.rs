@@ -1140,6 +1140,12 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
 }
 
 /// Factory: create provider with runtime options (auth profile override, state dir).
+///
+/// When `options.provider_api_url` is set (e.g. from `config.api_url`), it is
+/// forwarded as the `api_url` parameter for providers that accept a custom base
+/// URL (such as "openai" or "ollama").  This ensures delegate agents and
+/// sub-agents inherit the globally-configured API endpoint instead of falling
+/// back to the provider's hard-coded default (e.g. `api.openai.com`).
 pub fn create_provider_with_options(
     name: &str,
     api_key: Option<&str>,
@@ -1149,7 +1155,12 @@ pub fn create_provider_with_options(
         "openai-codex" | "openai_codex" | "codex" => Ok(Box::new(
             openai_codex::OpenAiCodexProvider::new(options, api_key)?,
         )),
-        _ => create_provider_with_url_and_options(name, api_key, None, options),
+        _ => create_provider_with_url_and_options(
+            name,
+            api_key,
+            options.provider_api_url.as_deref(),
+            options,
+        ),
     }
 }
 

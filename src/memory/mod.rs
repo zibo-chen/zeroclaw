@@ -123,15 +123,27 @@ fn resolve_embedding_config(
     embedding_routes: &[EmbeddingRouteConfig],
     api_key: Option<&str>,
 ) -> ResolvedEmbeddingConfig {
+    // Priority order for API key resolution:
+    // 1. [memory].embedding_api_key (dedicated embedding key)
+    // 2. [[embedding_routes]].api_key (route-specific override)
+    // 3. Top-level api_key (main provider key, used as fallback)
+    let memory_api_key = config
+        .embedding_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let fallback_api_key = api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    // For non-routed fallback, prefer memory-specific key over main provider key
+    let effective_fallback_key = memory_api_key.clone().or(fallback_api_key.clone());
     let fallback = ResolvedEmbeddingConfig {
         provider: config.embedding_provider.trim().to_string(),
         model: config.embedding_model.trim().to_string(),
         dimensions: config.embedding_dimensions,
-        api_key: fallback_api_key.clone(),
+        api_key: effective_fallback_key.clone(),
     };
 
     let Some(hint) = config
@@ -165,6 +177,7 @@ fn resolve_embedding_config(
         return fallback;
     }
 
+    // For routed config: route key > memory key > main provider key
     let routed_api_key = route
         .api_key
         .as_deref()
@@ -176,7 +189,7 @@ fn resolve_embedding_config(
         provider: provider.to_string(),
         model: model.to_string(),
         dimensions,
-        api_key: routed_api_key.or(fallback_api_key),
+        api_key: routed_api_key.or(memory_api_key).or(fallback_api_key),
     }
 }
 
@@ -708,6 +721,89 @@ mod tests {
                 model: "hint:semantic".into(),
                 dimensions: 1536,
                 api_key: Some("base-key".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_embedding_config_prefers_memory_api_key_over_base() {
+        let cfg = MemoryConfig {
+            embedding_provider: "openai".into(),
+            embedding_model: "text-embedding-3-small".into(),
+            embedding_dimensions: 1536,
+            embedding_api_key: Some("memory-specific-key".into()),
+            ..MemoryConfig::default()
+        };
+
+        // When memory.embedding_api_key is set, it takes precedence over base api_key
+        let resolved = resolve_embedding_config(&cfg, &[], Some("base-key"));
+        assert_eq!(
+            resolved,
+            ResolvedEmbeddingConfig {
+                provider: "openai".into(),
+                model: "text-embedding-3-small".into(),
+                dimensions: 1536,
+                api_key: Some("memory-specific-key".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_embedding_config_route_key_overrides_memory_key() {
+        let cfg = MemoryConfig {
+            embedding_provider: "none".into(),
+            embedding_model: "hint:semantic".into(),
+            embedding_dimensions: 1536,
+            embedding_api_key: Some("memory-specific-key".into()),
+            ..MemoryConfig::default()
+        };
+        let routes = vec![EmbeddingRouteConfig {
+            hint: "semantic".into(),
+            provider: "custom:https://api.example.com/v1".into(),
+            model: "custom-embed-v2".into(),
+            dimensions: Some(1024),
+            api_key: Some("route-key".into()),
+        }];
+
+        // Route-specific key takes highest precedence
+        let resolved = resolve_embedding_config(&cfg, &routes, Some("base-key"));
+        assert_eq!(
+            resolved,
+            ResolvedEmbeddingConfig {
+                provider: "custom:https://api.example.com/v1".into(),
+                model: "custom-embed-v2".into(),
+                dimensions: 1024,
+                api_key: Some("route-key".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_embedding_config_route_falls_back_to_memory_key() {
+        let cfg = MemoryConfig {
+            embedding_provider: "none".into(),
+            embedding_model: "hint:semantic".into(),
+            embedding_dimensions: 1536,
+            embedding_api_key: Some("memory-specific-key".into()),
+            ..MemoryConfig::default()
+        };
+        let routes = vec![EmbeddingRouteConfig {
+            hint: "semantic".into(),
+            provider: "custom:https://api.example.com/v1".into(),
+            model: "custom-embed-v2".into(),
+            dimensions: Some(1024),
+            api_key: None, // No route-specific key
+        }];
+
+        // Falls back to memory key when route has no key
+        let resolved = resolve_embedding_config(&cfg, &routes, Some("base-key"));
+        assert_eq!(
+            resolved,
+            ResolvedEmbeddingConfig {
+                provider: "custom:https://api.example.com/v1".into(),
+                model: "custom-embed-v2".into(),
+                dimensions: 1024,
+                api_key: Some("memory-specific-key".into()),
             }
         );
     }

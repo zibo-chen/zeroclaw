@@ -498,6 +498,7 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         embedding_provider: "none".to_string(),
         embedding_model: "text-embedding-3-small".to_string(),
         embedding_dimensions: 1536,
+        embedding_api_key: None,
         vector_weight: 0.7,
         keyword_weight: 0.3,
         min_relevance_score: 0.4,
