@@ -932,8 +932,6 @@ impl ModelRoutingConfigTool {
 
     async fn handle_upsert_agent(&self, args: &Value) -> anyhow::Result<ToolResult> {
         let name = Self::parse_non_empty_string(args, "name")?;
-        let provider = Self::parse_non_empty_string(args, "provider")?;
-        let model = Self::parse_non_empty_string(args, "model")?;
 
         let system_prompt_update = Self::parse_optional_string_update(args, "system_prompt")?;
         let api_key_update = Self::parse_optional_string_update(args, "api_key")?;
@@ -957,24 +955,36 @@ impl ModelRoutingConfigTool {
 
         let mut cfg = self.load_config_without_env()?;
 
-        let mut next_agent = cfg
-            .agents
-            .get(&name)
-            .cloned()
-            .unwrap_or(DelegateAgentConfig {
-                provider: provider.clone(),
-                model: model.clone(),
-                system_prompt: None,
-                api_key: None,
-                enabled: true,
-                capabilities: Vec::new(),
-                priority: 0,
-                temperature: None,
-                max_depth: DEFAULT_AGENT_MAX_DEPTH,
-                agentic: false,
-                allowed_tools: Vec::new(),
-                max_iterations: DEFAULT_AGENT_MAX_ITERATIONS,
-            });
+        let existing_agent = cfg.agents.get(&name).cloned();
+        let provider = match args.get("provider") {
+            Some(_) => Self::parse_non_empty_string(args, "provider")?,
+            None => existing_agent
+                .as_ref()
+                .map(|agent| agent.provider.clone())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'provider'"))?,
+        };
+        let model = match args.get("model") {
+            Some(_) => Self::parse_non_empty_string(args, "model")?,
+            None => existing_agent
+                .as_ref()
+                .map(|agent| agent.model.clone())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'model'"))?,
+        };
+
+        let mut next_agent = existing_agent.unwrap_or(DelegateAgentConfig {
+            provider: provider.clone(),
+            model: model.clone(),
+            system_prompt: None,
+            api_key: None,
+            enabled: true,
+            capabilities: Vec::new(),
+            priority: 0,
+            temperature: None,
+            max_depth: DEFAULT_AGENT_MAX_DEPTH,
+            agentic: false,
+            allowed_tools: Vec::new(),
+            max_iterations: DEFAULT_AGENT_MAX_ITERATIONS,
+        });
 
         next_agent.provider = provider;
         next_agent.model = model;
@@ -1649,6 +1659,46 @@ mod tests {
         let get_result = tool.execute(json!({"action": "get"})).await.unwrap();
         let output: Value = serde_json::from_str(&get_result.output).unwrap();
         assert_eq!(output["agents"]["planner"]["priority"], json!(0));
+    }
+
+    #[tokio::test]
+    async fn upsert_agent_update_allows_omitting_provider_and_model() {
+        let tmp = TempDir::new().unwrap();
+        let tool = ModelRoutingConfigTool::new(test_config(&tmp).await, test_security());
+
+        let created = tool
+            .execute(json!({
+                "action": "upsert_agent",
+                "name": "reviewer",
+                "provider": "openai",
+                "model": "gpt-5.3-codex",
+                "enabled": true,
+                "priority": 1
+            }))
+            .await
+            .unwrap();
+        assert!(created.success, "{:?}", created.error);
+
+        let updated = tool
+            .execute(json!({
+                "action": "upsert_agent",
+                "name": "reviewer",
+                "enabled": false,
+                "priority": 9
+            }))
+            .await
+            .unwrap();
+        assert!(updated.success, "{:?}", updated.error);
+
+        let get_result = tool.execute(json!({"action": "get"})).await.unwrap();
+        let output: Value = serde_json::from_str(&get_result.output).unwrap();
+        assert_eq!(output["agents"]["reviewer"]["provider"], json!("openai"));
+        assert_eq!(
+            output["agents"]["reviewer"]["model"],
+            json!("gpt-5.3-codex")
+        );
+        assert_eq!(output["agents"]["reviewer"]["enabled"], json!(false));
+        assert_eq!(output["agents"]["reviewer"]["priority"], json!(9));
     }
 
     #[tokio::test]
