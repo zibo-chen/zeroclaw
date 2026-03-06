@@ -863,6 +863,10 @@ fn parse_source_agent(raw_agent: &Value) -> Option<DelegateAgentConfig> {
         agentic: obj.get("agentic").and_then(Value::as_bool).unwrap_or(false),
         allowed_tools,
         max_iterations: find_usize(obj, &["max_iterations", "maxIterations"]).unwrap_or(10),
+        role_label: find_string(obj, &["role_label", "roleLabel"]),
+        role_color: find_string(obj, &["role_color", "roleColor"]),
+        role_icon: find_string(obj, &["role_icon", "roleIcon"]),
+        is_preset: find_bool(obj, &["is_preset", "isPreset"]).unwrap_or(false),
     })
 }
 

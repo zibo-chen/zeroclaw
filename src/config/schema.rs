@@ -496,6 +496,18 @@ pub struct DelegateAgentConfig {
     /// Maximum tool-call iterations in agentic mode.
     #[serde(default = "default_max_tool_iterations")]
     pub max_iterations: usize,
+    /// Optional display label for multi-agent role UI.
+    #[serde(default)]
+    pub role_label: Option<String>,
+    /// Optional hex color for multi-agent role UI (e.g. "#4A90D9").
+    #[serde(default)]
+    pub role_color: Option<String>,
+    /// Optional emoji icon for multi-agent role UI (e.g. "🏗️").
+    #[serde(default)]
+    pub role_icon: Option<String>,
+    /// Whether this is a built-in preset role (cannot be deleted).
+    #[serde(default)]
+    pub is_preset: bool,
 }
 
 fn default_max_depth() -> u32 {
@@ -525,6 +537,10 @@ impl std::fmt::Debug for DelegateAgentConfig {
             .field("agentic", &self.agentic)
             .field("allowed_tools", &self.allowed_tools)
             .field("max_iterations", &self.max_iterations)
+            .field("role_label", &self.role_label)
+            .field("role_color", &self.role_color)
+            .field("role_icon", &self.role_icon)
+            .field("is_preset", &self.is_preset)
             .finish()
     }
 }
