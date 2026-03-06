@@ -77,6 +77,25 @@ impl TaskPlanTool {
             })
     }
 
+    fn render_tasks(&self) -> String {
+        let tasks = self.tasks.read().unwrap();
+        if tasks.is_empty() {
+            return "No tasks.".into();
+        }
+
+        let completed = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Completed)
+            .count();
+        let total = tasks.len();
+
+        let mut lines = vec![format!("Tasks ({completed}/{total} completed):")];
+        for t in tasks.iter() {
+            lines.push(format!("- [{}] [{}] {}", t.id, t.status, t.title));
+        }
+        lines.join("\n")
+    }
+
     fn handle_create(&self, tasks_val: &serde_json::Value) -> ToolResult {
         let arr = match tasks_val.as_array() {
             Some(a) if !a.is_empty() => a,
@@ -119,7 +138,7 @@ impl TaskPlanTool {
 
         ToolResult {
             success: true,
-            output: format!("Created {count} task(s)."),
+            output: format!("Created {count} task(s).\n{}", self.render_tasks()),
             error: None,
         }
     }
@@ -145,7 +164,7 @@ impl TaskPlanTool {
 
         ToolResult {
             success: true,
-            output: format!("Added task [{id}] \"{title}\"."),
+            output: format!("Added task [{id}] \"{title}\".\n{}", self.render_tasks()),
             error: None,
         }
     }
@@ -168,9 +187,10 @@ impl TaskPlanTool {
         match tasks.iter_mut().find(|t| t.id == id) {
             Some(task) => {
                 task.status = status;
+                drop(tasks);
                 ToolResult {
                     success: true,
-                    output: format!("Task [{id}] updated to {status}."),
+                    output: format!("Task [{id}] updated to {status}.\n{}", self.render_tasks()),
                     error: None,
                 }
             }
@@ -183,29 +203,9 @@ impl TaskPlanTool {
     }
 
     fn handle_list(&self) -> ToolResult {
-        let tasks = self.tasks.read().unwrap();
-        if tasks.is_empty() {
-            return ToolResult {
-                success: true,
-                output: "No tasks.".into(),
-                error: None,
-            };
-        }
-
-        let completed = tasks
-            .iter()
-            .filter(|t| t.status == TaskStatus::Completed)
-            .count();
-        let total = tasks.len();
-
-        let mut lines = vec![format!("Tasks ({completed}/{total} completed):")];
-        for t in tasks.iter() {
-            lines.push(format!("- [{}] [{}] {}", t.id, t.status, t.title));
-        }
-
         ToolResult {
             success: true,
-            output: lines.join("\n"),
+            output: self.render_tasks(),
             error: None,
         }
     }
@@ -216,7 +216,7 @@ impl TaskPlanTool {
 
         ToolResult {
             success: true,
-            output: "Task list cleared.".into(),
+            output: "Task list cleared.\nNo tasks.".into(),
             error: None,
         }
     }

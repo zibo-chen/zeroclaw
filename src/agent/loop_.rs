@@ -613,6 +613,8 @@ fn truncate_tool_args_for_progress(name: &str, args: &serde_json::Value, max_len
         "browser_navigate" | "browser_screenshot" | "browser_click" | "browser_type" => {
             args.get("url").and_then(|v| v.as_str())
         }
+        // task_plan: emit full JSON so the desktop UI can reconstruct plan state.
+        "task_plan" => return args.to_string(),
         _ => args
             .get("action")
             .and_then(|v| v.as_str())

@@ -867,6 +867,7 @@ fn parse_source_agent(raw_agent: &Value) -> Option<DelegateAgentConfig> {
         role_color: find_string(obj, &["role_color", "roleColor"]),
         role_icon: find_string(obj, &["role_icon", "roleIcon"]),
         is_preset: find_bool(obj, &["is_preset", "isPreset"]).unwrap_or(false),
+        allow_nested_delegate: find_bool(obj, &["allow_nested_delegate", "allowNestedDelegate"]).unwrap_or(false),
     })
 }
 

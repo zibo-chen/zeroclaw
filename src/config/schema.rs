@@ -508,6 +508,11 @@ pub struct DelegateAgentConfig {
     /// Whether this is a built-in preset role (cannot be deleted).
     #[serde(default)]
     pub is_preset: bool,
+    /// Allow this sub-agent to use the `delegate` tool to hand off work to
+    /// other sub-agents (nested / inter-role delegation).  Requires
+    /// `agentic = true` and respects `max_depth` to prevent infinite loops.
+    #[serde(default)]
+    pub allow_nested_delegate: bool,
 }
 
 fn default_max_depth() -> u32 {
@@ -541,6 +546,7 @@ impl std::fmt::Debug for DelegateAgentConfig {
             .field("role_color", &self.role_color)
             .field("role_icon", &self.role_icon)
             .field("is_preset", &self.is_preset)
+            .field("allow_nested_delegate", &self.allow_nested_delegate)
             .finish()
     }
 }

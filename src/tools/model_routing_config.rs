@@ -988,6 +988,7 @@ impl ModelRoutingConfigTool {
             role_color: None,
             role_icon: None,
             is_preset: false,
+            allow_nested_delegate: false,
         });
 
         next_agent.provider = provider;

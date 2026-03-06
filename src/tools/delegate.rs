@@ -53,6 +53,10 @@ pub struct DelegateTool {
     load_tracker: AgentLoadTracker,
     /// Optional runtime config file path for hot-reloaded orchestration settings.
     runtime_config_path: Option<PathBuf>,
+    /// Per-role conversation history for context persistence across delegate calls.
+    /// Keyed by agent name, stores previous interactions so sub-agents retain
+    /// context across multiple invocations within the same session.
+    role_context_store: Arc<tokio::sync::RwLock<HashMap<String, Vec<ChatMessage>>>>,
 }
 
 impl DelegateTool {
@@ -89,6 +93,7 @@ impl DelegateTool {
             team_settings: AgentTeamsConfig::default(),
             load_tracker: AgentLoadTracker::new(),
             runtime_config_path: None,
+            role_context_store: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -131,6 +136,7 @@ impl DelegateTool {
             team_settings: AgentTeamsConfig::default(),
             load_tracker: AgentLoadTracker::new(),
             runtime_config_path: None,
+            role_context_store: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -143,6 +149,16 @@ impl DelegateTool {
     /// Attach multimodal configuration for sub-agent tool loops.
     pub fn with_multimodal_config(mut self, config: crate::config::MultimodalConfig) -> Self {
         self.multimodal_config = config;
+        self
+    }
+
+    /// Share an existing role context store so multiple DelegateTool instances
+    /// (e.g. after agent recreation) can share persistent role context.
+    pub fn with_role_context_store(
+        mut self,
+        store: Arc<tokio::sync::RwLock<HashMap<String, Vec<ChatMessage>>>>,
+    ) -> Self {
+        self.role_context_store = store;
         self
     }
 
@@ -558,13 +574,46 @@ impl DelegateTool {
             .filter(|name| !name.is_empty())
             .collect::<std::collections::HashSet<_>>();
 
-        let sub_tools: Vec<Box<dyn Tool>> = self
+        // Build sub-agent tool list. When `allow_nested_delegate` is true AND
+        // there is remaining depth budget, include a child DelegateTool so the
+        // sub-agent can hand off work to peers. Otherwise exclude `delegate`.
+        let mut sub_tools: Vec<Box<dyn Tool>> = self
             .parent_tools
             .iter()
             .filter(|tool| allowed.contains(tool.name()))
-            .filter(|tool| tool.name() != "delegate")
+            .filter(|tool| {
+                if tool.name() == "delegate" {
+                    // Only include delegate if nested delegation is explicitly
+                    // enabled for this agent AND depth budget remains.
+                    agent_config.allow_nested_delegate && self.depth + 1 < agent_config.max_depth
+                } else {
+                    true
+                }
+            })
             .map(|tool| Box::new(ToolArcRef::new(tool.clone())) as Box<dyn Tool>)
             .collect();
+
+        // If nested delegate is allowed, replace the parent's DelegateTool with
+        // a depth-incremented child instance that shares the same context store.
+        if agent_config.allow_nested_delegate && self.depth + 1 < agent_config.max_depth {
+            sub_tools.retain(|tool| tool.name() != "delegate");
+            let child_delegate = DelegateTool {
+                agents: self.agents.clone(),
+                security: self.security.clone(),
+                fallback_credential: self.fallback_credential.clone(),
+                provider_runtime_options: self.provider_runtime_options.clone(),
+                depth: self.depth + 1,
+                parent_tools: self.parent_tools.clone(),
+                multimodal_config: self.multimodal_config.clone(),
+                coordination_bus: self.coordination_bus.clone(),
+                coordination_lead_agent: self.coordination_lead_agent.clone(),
+                team_settings: self.team_settings.clone(),
+                load_tracker: self.load_tracker.clone(),
+                runtime_config_path: self.runtime_config_path.clone(),
+                role_context_store: self.role_context_store.clone(),
+            };
+            sub_tools.push(Box::new(child_delegate));
+        }
 
         if sub_tools.is_empty() {
             return Ok(ToolResult {
@@ -577,11 +626,32 @@ impl DelegateTool {
             });
         }
 
+        // Restore previous context for this role (if any) so the sub-agent
+        // retains conversational memory across multiple delegate calls.
         let mut history = Vec::new();
         if let Some(system_prompt) = agent_config.system_prompt.as_ref() {
             history.push(ChatMessage::system(system_prompt.clone()));
         }
-        history.push(ChatMessage::user(full_prompt.to_string()));
+
+        // Inject prior context from the role's persistent store.
+        {
+            let store = self.role_context_store.read().await;
+            if let Some(prior) = store.get(agent_name) {
+                // Skip the system message (already added above) and append
+                // previous user/assistant turns so the agent has memory.
+                for msg in prior {
+                    if msg.role != crate::providers::ROLE_SYSTEM {
+                        history.push(msg.clone());
+                    }
+                }
+                // Insert a separator so the agent knows new context is starting.
+                history.push(ChatMessage::user(
+                    "[Previous context restored. New task follows.]\n\n".to_string() + full_prompt,
+                ));
+            } else {
+                history.push(ChatMessage::user(full_prompt.to_string()));
+            }
+        }
 
         let noop_observer = NoopObserver;
 
@@ -608,6 +678,26 @@ impl DelegateTool {
             ),
         )
         .await;
+
+        // Persist the conversation history for this role so subsequent
+        // delegate calls to the same agent retain context.
+        {
+            let mut store = self.role_context_store.write().await;
+            // Keep only the non-system messages to avoid duplicating system
+            // prompts.  Cap at a reasonable size to prevent unbounded growth.
+            let context_messages: Vec<ChatMessage> = history
+                .iter()
+                .filter(|m| m.role != crate::providers::ROLE_SYSTEM)
+                .cloned()
+                .collect();
+            const MAX_CONTEXT_MESSAGES: usize = 40;
+            let trimmed = if context_messages.len() > MAX_CONTEXT_MESSAGES {
+                context_messages[context_messages.len() - MAX_CONTEXT_MESSAGES..].to_vec()
+            } else {
+                context_messages
+            };
+            store.insert(agent_name.to_string(), trimmed);
+        }
 
         match result {
             Ok(Ok(response)) => {
