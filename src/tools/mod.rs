@@ -1281,12 +1281,12 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"collaborate"));
         assert!(names.contains(&"delegate_coordination_status"));
     }
 
     #[test]
-    fn all_tools_excludes_delegate_when_no_agents() {
+    fn all_tools_excludes_collaborate_when_no_agents() {
         let tmp = TempDir::new().unwrap();
         let security = Arc::new(SecurityPolicy::default());
         let mem_cfg = MemoryConfig {
@@ -1315,7 +1315,7 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(!names.contains(&"delegate"));
+        assert!(!names.contains(&"collaborate"));
         assert!(!names.contains(&"delegate_coordination_status"));
     }
 
@@ -1369,12 +1369,12 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"collaborate"));
         assert!(!names.contains(&"delegate_coordination_status"));
     }
 
     #[test]
-    fn all_tools_keeps_delegate_registered_when_team_toggle_is_off() {
+    fn all_tools_keeps_collaborate_registered_when_team_toggle_is_off() {
         let tmp = TempDir::new().unwrap();
         let security = Arc::new(SecurityPolicy::default());
         let mem_cfg = MemoryConfig {
@@ -1424,7 +1424,7 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"collaborate"));
         assert!(names.contains(&"subagent_spawn"));
     }
 
@@ -1479,7 +1479,7 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"collaborate"));
         assert!(names.contains(&"subagent_spawn"));
         assert!(names.contains(&"subagent_list"));
         assert!(names.contains(&"subagent_manage"));

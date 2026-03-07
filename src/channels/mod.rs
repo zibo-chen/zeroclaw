@@ -5603,8 +5603,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
     ));
     if !config.agents.is_empty() {
         tool_descs.push((
-            "delegate",
-            "Delegate a subtask to a specialized agent. Use when: a task benefits from a different model (e.g. fast summarization, deep reasoning, code generation). The sub-agent runs a single prompt and returns its response.",
+            "collaborate",
+            "Engage a specialized role agent for collaborative work. Use when: a task benefits from a different expertise domain (e.g. architecture review, code generation, testing). Role agents are peers that collaborate.",
         ));
         tool_descs.push((
             "subagent_spawn",

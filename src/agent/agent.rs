@@ -371,26 +371,35 @@ impl Agent {
 
         // Delegate to the existing run_tool_call_loop which already supports
         // on_delta streaming, tool approval, hooks, parallel tools etc.
-        let result = run_tool_call_loop(
-            self.provider.as_ref(),
-            &mut chat_history,
-            &self.tools,
-            self.observer.as_ref(),
-            "", // provider_name (cosmetic, used for tracing)
-            &effective_model,
-            self.temperature,
-            true,         // silent — don't print to stdout
-            approval_ref, // approval — only active when desktop UI provides callback
-            "desktop",    // channel_name
-            &crate::config::MultimodalConfig::default(),
-            self.config.max_tool_iterations,
-            cancellation_token,
-            Some(on_delta),
-            None, // hooks
-            &[],  // excluded_tools
-            on_approval,
-        )
-        .await;
+        //
+        // We also scope a task-local DELEGATE_STREAMING_TX so that DelegateTool
+        // instances executing within the tool loop can read the on_delta sender
+        // and forward sub-agent tokens to the UI in real-time.
+        let on_delta_for_delegate = on_delta.clone();
+        let result = crate::tools::delegate::DELEGATE_STREAMING_TX
+            .scope(
+                Some(on_delta_for_delegate),
+                run_tool_call_loop(
+                    self.provider.as_ref(),
+                    &mut chat_history,
+                    &self.tools,
+                    self.observer.as_ref(),
+                    "", // provider_name (cosmetic, used for tracing)
+                    &effective_model,
+                    self.temperature,
+                    true,         // silent — don't print to stdout
+                    approval_ref, // approval — only active when desktop UI provides callback
+                    "desktop",    // channel_name
+                    &crate::config::MultimodalConfig::default(),
+                    self.config.max_tool_iterations,
+                    cancellation_token,
+                    Some(on_delta),
+                    None, // hooks
+                    &[],  // excluded_tools
+                    on_approval,
+                ),
+            )
+            .await;
 
         // Sync the chat_history mutations (tool results, assistant messages)
         // back into our ConversationMessage history.

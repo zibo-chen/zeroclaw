@@ -615,6 +615,8 @@ fn truncate_tool_args_for_progress(name: &str, args: &serde_json::Value, max_len
         }
         // task_plan: emit full JSON so the desktop UI can reconstruct plan state.
         "task_plan" => return args.to_string(),
+        // collaborate: emit full JSON so the relay can extract agent name for RoleSwitch.
+        "collaborate" => return args.to_string(),
         _ => args
             .get("action")
             .and_then(|v| v.as_str())
@@ -3107,8 +3109,8 @@ pub async fn run(
     ));
     if !config.agents.is_empty() {
         tool_descs.push((
-            "delegate",
-            "Delegate a sub-task to a specialized agent. Use when: task needs different model/capability, or to parallelize work.",
+            "collaborate",
+            "Engage a role agent for collaborative work. Use when: task needs different expertise, or to parallelize work.",
         ));
     }
     if config.peripherals.enabled && !config.peripherals.boards.is_empty() {

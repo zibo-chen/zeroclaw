@@ -3612,7 +3612,7 @@ fn default_non_cli_excluded_tools() -> Vec<String> {
         "channel_ack_config",
         "pushover",
         "composio",
-        "delegate",
+        "collaborate",
         "screenshot",
         "image_info",
     ]
@@ -10049,7 +10049,7 @@ mod tests {
         assert!(!a.allow_sensitive_file_writes);
         assert!(a.non_cli_excluded_tools.contains(&"shell".to_string()));
         assert!(a.non_cli_excluded_tools.contains(&"process".to_string()));
-        assert!(a.non_cli_excluded_tools.contains(&"delegate".to_string()));
+        assert!(a.non_cli_excluded_tools.contains(&"collaborate".to_string()));
     }
 
     #[test]
@@ -10745,7 +10745,7 @@ max_tool_iterations = 20
 max_history_messages = 80
 parallel_tools = true
 tool_dispatcher = "xml"
-allowed_tools = ["delegate", "task_plan"]
+allowed_tools = ["collaborate", "task_plan"]
 denied_tools = ["shell"]
 "#;
         let parsed: Config = toml::from_str(raw).unwrap();
@@ -10756,7 +10756,7 @@ denied_tools = ["shell"]
         assert_eq!(parsed.agent.tool_dispatcher, "xml");
         assert_eq!(
             parsed.agent.allowed_tools,
-            vec!["delegate".to_string(), "task_plan".to_string()]
+            vec!["collaborate".to_string(), "task_plan".to_string()]
         );
         assert_eq!(parsed.agent.denied_tools, vec!["shell".to_string()]);
     }

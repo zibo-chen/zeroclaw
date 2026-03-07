@@ -10,12 +10,23 @@ use crate::providers::{self, ChatMessage, Provider};
 use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
+
+// Task-local streaming sender for forwarding role agent tokens to the UI.
+//
+// When a DelegateTool is executing inside a streaming turn (e.g.
+// `Agent::turn_streaming`), this task-local carries a clone of the
+// `on_delta` mpsc sender.  DelegateTool reads it to stream sub-agent
+// output token-by-token instead of blocking until completion.
+tokio::task_local! {
+    pub(crate) static DELEGATE_STREAMING_TX: Option<tokio::sync::mpsc::Sender<String>>;
+}
 
 /// Default timeout for sub-agent provider calls.
 const DELEGATE_TIMEOUT_SECS: u64 = 120;
@@ -254,13 +265,14 @@ impl DelegateTool {
 #[async_trait]
 impl Tool for DelegateTool {
     fn name(&self) -> &str {
-        "delegate"
+        "collaborate"
     }
 
     fn description(&self) -> &str {
-        "Delegate a subtask to a specialized agent. Use when: a task benefits from a different model \
-         (e.g. fast summarization, deep reasoning, code generation). The sub-agent runs a single \
-         prompt by default; with agentic=true it can iterate with a filtered tool-call loop. \
+        "Engage a specialized role agent for collaborative work. Use when: a task benefits from \
+         a different expertise domain (e.g. architecture review, code generation, testing). \
+         The role agent runs a single prompt by default; with agentic=true it can iterate with \
+         a filtered tool-call loop. Role agents are peers that collaborate, not subordinates. \
          `agent` may be omitted or set to `auto` when team auto-activation is enabled."
     }
 
@@ -274,7 +286,7 @@ impl Tool for DelegateTool {
                     "type": "string",
                     "minLength": 1,
                     "description": format!(
-                        "Name of the agent to delegate to. Available: {}",
+                        "Name of the role to collaborate with. Available: {}",
                         if agent_names.is_empty() {
                             "(none configured)".to_string()
                         } else {
@@ -285,7 +297,7 @@ impl Tool for DelegateTool {
                 "prompt": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "The task/prompt to send to the sub-agent"
+                    "description": "The task or message to send to the role agent"
                 },
                 "context": {
                     "type": "string",
@@ -386,7 +398,7 @@ impl Tool for DelegateTool {
 
         if let Err(error) = self
             .security
-            .enforce_tool_operation(ToolOperation::Act, "delegate")
+            .enforce_tool_operation(ToolOperation::Act, "collaborate")
         {
             return Ok(ToolResult {
                 success: false,
@@ -477,35 +489,89 @@ impl Tool for DelegateTool {
             return Ok(result);
         }
 
-        // Wrap the provider call in a timeout to prevent indefinite blocking
-        let result = tokio::time::timeout(
-            Duration::from_secs(DELEGATE_TIMEOUT_SECS),
-            provider.chat_with_system(
+        // Wrap the provider call in a timeout to prevent indefinite blocking.
+        // When a streaming sender is available (desktop UI), use the streaming
+        // API so tokens are forwarded to the UI in real-time.
+        let streaming_tx = DELEGATE_STREAMING_TX.try_with(Clone::clone).ok().flatten();
+
+        let result = if let Some(ref tx) = streaming_tx {
+            // Streaming path: forward chunks token-by-token
+            let stream_opts = crate::providers::traits::StreamOptions::new(true);
+            let mut stream = provider.stream_chat_with_system(
                 agent_config.system_prompt.as_deref(),
                 &full_prompt,
                 &agent_config.model,
                 temperature,
-            ),
-        )
-        .await;
-
-        let result = match result {
-            Ok(inner) => inner,
-            Err(_elapsed) => {
-                let timeout_message =
-                    format!("Agent '{agent_name}' timed out after {DELEGATE_TIMEOUT_SECS}s");
-                self.finish_coordination_trace(
-                    agent_name,
-                    &coordination_trace,
-                    false,
-                    &timeout_message,
-                );
-                load_lease.mark_failure();
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(timeout_message),
-                });
+                stream_opts,
+            );
+            let mut collected = String::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(DELEGATE_TIMEOUT_SECS);
+            loop {
+                match tokio::time::timeout_at(deadline, stream.next()).await {
+                    Ok(Some(Ok(chunk))) => {
+                        if chunk.is_final {
+                            break;
+                        }
+                        if !chunk.delta.is_empty() {
+                            collected.push_str(&chunk.delta);
+                            let _ = tx.send(chunk.delta).await;
+                        }
+                    }
+                    Ok(Some(Err(_e))) => {
+                        break; // Stream error — use what we collected so far
+                    }
+                    Ok(None) => break, // Stream ended
+                    Err(_) => {
+                        // Timeout
+                        let timeout_message = format!(
+                            "Agent '{agent_name}' timed out after {DELEGATE_TIMEOUT_SECS}s"
+                        );
+                        self.finish_coordination_trace(
+                            agent_name,
+                            &coordination_trace,
+                            false,
+                            &timeout_message,
+                        );
+                        load_lease.mark_failure();
+                        return Ok(ToolResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some(timeout_message),
+                        });
+                    }
+                }
+            }
+            Ok(collected)
+        } else {
+            // Non-streaming fallback (CLI or no desktop UI)
+            let chat_result = tokio::time::timeout(
+                Duration::from_secs(DELEGATE_TIMEOUT_SECS),
+                provider.chat_with_system(
+                    agent_config.system_prompt.as_deref(),
+                    &full_prompt,
+                    &agent_config.model,
+                    temperature,
+                ),
+            )
+            .await;
+            match chat_result {
+                Ok(inner) => inner,
+                Err(_elapsed) => {
+                    let timeout_message =
+                        format!("Agent '{agent_name}' timed out after {DELEGATE_TIMEOUT_SECS}s");
+                    self.finish_coordination_trace(
+                        agent_name,
+                        &coordination_trace,
+                        false,
+                        &timeout_message,
+                    );
+                    load_lease.mark_failure();
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(timeout_message),
+                    });
+                }
             }
         };
 
@@ -576,14 +642,14 @@ impl DelegateTool {
 
         // Build sub-agent tool list. When `allow_nested_delegate` is true AND
         // there is remaining depth budget, include a child DelegateTool so the
-        // sub-agent can hand off work to peers. Otherwise exclude `delegate`.
+        // role agent can hand off work to peers. Otherwise exclude `collaborate`.
         let mut sub_tools: Vec<Box<dyn Tool>> = self
             .parent_tools
             .iter()
             .filter(|tool| allowed.contains(tool.name()))
             .filter(|tool| {
-                if tool.name() == "delegate" {
-                    // Only include delegate if nested delegation is explicitly
+                if tool.name() == "collaborate" {
+                    // Only include collaborate if nested collaboration is explicitly
                     // enabled for this agent AND depth budget remains.
                     agent_config.allow_nested_delegate && self.depth + 1 < agent_config.max_depth
                 } else {
@@ -593,10 +659,10 @@ impl DelegateTool {
             .map(|tool| Box::new(ToolArcRef::new(tool.clone())) as Box<dyn Tool>)
             .collect();
 
-        // If nested delegate is allowed, replace the parent's DelegateTool with
+        // If nested collaboration is allowed, replace the parent's DelegateTool with
         // a depth-incremented child instance that shares the same context store.
         if agent_config.allow_nested_delegate && self.depth + 1 < agent_config.max_depth {
-            sub_tools.retain(|tool| tool.name() != "delegate");
+            sub_tools.retain(|tool| tool.name() != "collaborate");
             let child_delegate = DelegateTool {
                 agents: self.agents.clone(),
                 security: self.security.clone(),
@@ -655,6 +721,10 @@ impl DelegateTool {
 
         let noop_observer = NoopObserver;
 
+        // Read the streaming sender from the task-local so the sub-agent's
+        // tool lifecycle events and text tokens stream to the UI in real-time.
+        let delegate_tx = DELEGATE_STREAMING_TX.try_with(Clone::clone).ok().flatten();
+
         let result = tokio::time::timeout(
             Duration::from_secs(DELEGATE_AGENTIC_TIMEOUT_SECS),
             run_tool_call_loop(
@@ -667,11 +737,11 @@ impl DelegateTool {
                 temperature,
                 true,
                 None,
-                "delegate",
+                "collaborate",
                 &self.multimodal_config,
                 agent_config.max_iterations,
                 None,
-                None,
+                delegate_tx,
                 None,
                 &[],
                 None,
@@ -1206,7 +1276,7 @@ max_concurrent = {subagents_max_concurrent}
     #[test]
     fn name_and_schema() {
         let tool = DelegateTool::new(sample_agents(), None, test_security());
-        assert_eq!(tool.name(), "delegate");
+        assert_eq!(tool.name(), "collaborate");
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["agent"].is_object());
         assert!(schema["properties"]["prompt"].is_object());
@@ -1643,8 +1713,8 @@ max_concurrent = {subagents_max_concurrent}
     }
 
     #[tokio::test]
-    async fn execute_agentic_excludes_delegate_even_if_allowlisted() {
-        let config = agentic_config(vec!["delegate".to_string()], 10);
+    async fn execute_agentic_excludes_collaborate_even_if_allowlisted() {
+        let config = agentic_config(vec!["collaborate".to_string()], 10);
         let tool = DelegateTool::new(HashMap::new(), None, test_security()).with_parent_tools(
             Arc::new(vec![Arc::new(DelegateTool::new(
                 HashMap::new(),

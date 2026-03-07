@@ -539,12 +539,11 @@ async fn run_agentic_background(
         .iter()
         .filter(|tool| allowed.contains(tool.name()))
         .filter(|tool| {
-            if tool.name() == "delegate" {
-                // Allow delegate if nested delegation is enabled for this agent
+            if tool.name() == "collaborate" {
+                // Allow collaborate if nested collaboration is enabled for this agent
                 agent_config.allow_nested_delegate
             } else {
-                tool.name() != "subagent_spawn"
-                    && tool.name() != "subagent_manage"
+                tool.name() != "subagent_spawn" && tool.name() != "subagent_manage"
             }
         })
         .map(|tool| Box::new(ToolArcRef::new(tool.clone())) as Box<dyn Tool>)
