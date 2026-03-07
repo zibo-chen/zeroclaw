@@ -615,8 +615,8 @@ fn truncate_tool_args_for_progress(name: &str, args: &serde_json::Value, max_len
         }
         // task_plan: emit full JSON so the desktop UI can reconstruct plan state.
         "task_plan" => return args.to_string(),
-        // collaborate: emit full JSON so the relay can extract agent name for RoleSwitch.
-        "collaborate" => return args.to_string(),
+        // delegate: emit full JSON so the relay can extract agent name for RoleSwitch.
+        "delegate" => return args.to_string(),
         _ => args
             .get("action")
             .and_then(|v| v.as_str())
@@ -3109,8 +3109,16 @@ pub async fn run(
     ));
     if !config.agents.is_empty() {
         tool_descs.push((
-            "collaborate",
-            "Engage a role agent for collaborative work. Use when: task needs different expertise, or to parallelize work.",
+            "delegate",
+            "Delegate task to a role. Returns [context_id: N] — use context_refs to pass prior outputs by reference, saving tokens.",
+        ));
+        tool_descs.push((
+            "subagent_execute",
+            "Execute a sub-agent synchronously, blocking until the result is available. Use for tasks that require the result before continuing.",
+        ));
+        tool_descs.push((
+            "team_context",
+            "Read, write, or list shared team context. Roles share findings, decisions, and intermediate results with each other.",
         ));
     }
     if config.peripherals.enabled && !config.peripherals.boards.is_empty() {
@@ -4556,6 +4564,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("anthropic route should not fail on a false-negative vision capability probe");
@@ -4593,6 +4602,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    None,
                 ),
             )
             .await
@@ -4636,6 +4646,7 @@ mod tests {
                     None,
                     None,
                     &[],
+                    None,
                 ),
             )
             .await
@@ -4991,6 +5002,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("tool loop should complete with denied tool execution");
@@ -5050,6 +5062,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("tool loop should consume non-cli session grants");
@@ -5271,6 +5284,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("tool loop should consume one-time allow-all token");
@@ -5326,6 +5340,7 @@ mod tests {
             None,
             None,
             &excluded_tools,
+            None,
         )
         .await
         .expect("tool loop should complete with blocked tool execution");
@@ -5507,6 +5522,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("loop should recover after one deferred-action reply");
@@ -5555,6 +5571,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect_err("second deferred response without tool call should hard-fail");
@@ -5640,6 +5657,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("truncated native arguments should trigger safe retry");
@@ -5738,6 +5756,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("invalid native args should force retry without text fallback execution");
@@ -5818,6 +5837,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("valid native tool calls must execute even when stop_reason is max_tokens");
@@ -5883,6 +5903,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("max-token continuation should complete");
@@ -5959,6 +5980,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("continuation should degrade to partial output");
@@ -6018,6 +6040,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .await
         .expect("continuation should clamp oversized merge");
@@ -6077,6 +6100,7 @@ mod tests {
             None,
             Some(&hooks),
             &[],
+            None,
         )
         .await
         .expect("loop should complete");

@@ -27,6 +27,7 @@ pub mod channel_ack_config;
 pub mod cli_discovery;
 pub mod composio;
 pub mod content_search;
+pub mod context_registry;
 pub mod cron_add;
 pub mod cron_list;
 pub mod cron_remove;
@@ -72,11 +73,13 @@ pub mod schedule;
 pub mod schema;
 pub mod screenshot;
 pub mod shell;
+pub mod subagent_execute;
 pub mod subagent_list;
 pub mod subagent_manage;
 pub mod subagent_registry;
 pub mod subagent_spawn;
 pub mod task_plan;
+pub mod team_context;
 pub mod traits;
 pub mod url_validation;
 pub mod wasm_module;
@@ -98,6 +101,7 @@ pub use browser_open::BrowserOpenTool;
 pub use channel_ack_config::ChannelAckConfigTool;
 pub use composio::ComposioTool;
 pub use content_search::ContentSearchTool;
+pub use context_registry::ContextRegistry;
 pub use cron_add::CronAddTool;
 pub use cron_list::CronListTool;
 pub use cron_remove::CronRemoveTool;
@@ -140,11 +144,13 @@ pub use schedule::ScheduleTool;
 pub use schema::{CleaningStrategy, SchemaCleanr};
 pub use screenshot::ScreenshotTool;
 pub use shell::ShellTool;
+pub use subagent_execute::SubAgentExecuteTool;
 pub use subagent_list::SubAgentListTool;
 pub use subagent_manage::SubAgentManageTool;
 pub use subagent_registry::SubAgentRegistry;
 pub use subagent_spawn::SubAgentSpawnTool;
 pub use task_plan::TaskPlanTool;
+pub use team_context::TeamContextTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{ToolResult, ToolSpec};
@@ -700,11 +706,16 @@ pub fn all_tools_with_runtime(
             }
 
             delegate_tool = delegate_tool
-                .with_coordination_bus(coordination_bus.clone(), coordination_lead_agent);
+                .with_coordination_bus(coordination_bus.clone(), coordination_lead_agent.clone());
             tool_arcs.push(Arc::new(delegate_tool));
             tool_arcs.push(Arc::new(DelegateCoordinationStatusTool::new(
+                coordination_bus.clone(),
+                security.clone(),
+            )));
+            tool_arcs.push(Arc::new(TeamContextTool::new(
                 coordination_bus,
                 security.clone(),
+                coordination_lead_agent,
             )));
         } else {
             delegate_tool = delegate_tool.with_coordination_disabled();
@@ -714,15 +725,29 @@ pub fn all_tools_with_runtime(
         let subagent_registry = Arc::new(SubAgentRegistry::new());
         tool_arcs.push(Arc::new(
             SubAgentSpawnTool::new(
+                all_agents.clone(),
+                delegate_fallback_credential.clone(),
+                security.clone(),
+                provider_runtime_options.clone(),
+                subagent_registry.clone(),
+                parent_tools.clone(),
+                root_config.multimodal.clone(),
+                root_config.agent.subagents.enabled,
+                root_config.agent.subagents.max_concurrent,
+                root_config.agent.subagents.auto_activate,
+                runtime_config_path.clone(),
+            )
+            .with_load_tracker(load_tracker.clone()),
+        ));
+        tool_arcs.push(Arc::new(
+            SubAgentExecuteTool::new(
                 all_agents,
                 delegate_fallback_credential,
                 security.clone(),
                 provider_runtime_options,
-                subagent_registry.clone(),
                 parent_tools,
                 root_config.multimodal.clone(),
                 root_config.agent.subagents.enabled,
-                root_config.agent.subagents.max_concurrent,
                 root_config.agent.subagents.auto_activate,
                 runtime_config_path,
             )
@@ -1263,6 +1288,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
@@ -1281,12 +1311,12 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"collaborate"));
+        assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_coordination_status"));
     }
 
     #[test]
-    fn all_tools_excludes_collaborate_when_no_agents() {
+    fn all_tools_excludes_delegate_when_no_agents() {
         let tmp = TempDir::new().unwrap();
         let security = Arc::new(SecurityPolicy::default());
         let mem_cfg = MemoryConfig {
@@ -1315,7 +1345,7 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(!names.contains(&"collaborate"));
+        assert!(!names.contains(&"delegate"));
         assert!(!names.contains(&"delegate_coordination_status"));
     }
 
@@ -1351,6 +1381,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
@@ -1369,12 +1404,12 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"collaborate"));
+        assert!(names.contains(&"delegate"));
         assert!(!names.contains(&"delegate_coordination_status"));
     }
 
     #[test]
-    fn all_tools_keeps_collaborate_registered_when_team_toggle_is_off() {
+    fn all_tools_keeps_delegate_registered_when_team_toggle_is_off() {
         let tmp = TempDir::new().unwrap();
         let security = Arc::new(SecurityPolicy::default());
         let mem_cfg = MemoryConfig {
@@ -1406,6 +1441,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
@@ -1424,7 +1464,7 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"collaborate"));
+        assert!(names.contains(&"delegate"));
         assert!(names.contains(&"subagent_spawn"));
     }
 
@@ -1461,6 +1501,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
@@ -1479,7 +1524,7 @@ mod tests {
             &cfg,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"collaborate"));
+        assert!(names.contains(&"delegate"));
         assert!(names.contains(&"subagent_spawn"));
         assert!(names.contains(&"subagent_list"));
         assert!(names.contains(&"subagent_manage"));

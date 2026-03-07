@@ -1,5 +1,6 @@
 use super::agent_load_tracker::AgentLoadTracker;
 use super::agent_selection::{select_agent_with_load, AgentSelectionPolicy};
+use super::context_registry::ContextRegistry;
 use super::orchestration_settings::load_orchestration_settings;
 use super::traits::{Tool, ToolResult};
 use crate::agent::loop_::run_tool_call_loop;
@@ -68,6 +69,10 @@ pub struct DelegateTool {
     /// Keyed by agent name, stores previous interactions so sub-agents retain
     /// context across multiple invocations within the same session.
     role_context_store: Arc<tokio::sync::RwLock<HashMap<String, Vec<ChatMessage>>>>,
+    /// Numbered context registry — stores delegate outputs with auto-incrementing
+    /// IDs so the Orchestrator can reference prior results by `context_refs: [1, 3]`
+    /// instead of re-outputting full text, saving significant output tokens.
+    context_registry: ContextRegistry,
 }
 
 impl DelegateTool {
@@ -105,6 +110,7 @@ impl DelegateTool {
             load_tracker: AgentLoadTracker::new(),
             runtime_config_path: None,
             role_context_store: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            context_registry: ContextRegistry::new(),
         }
     }
 
@@ -148,6 +154,7 @@ impl DelegateTool {
             load_tracker: AgentLoadTracker::new(),
             runtime_config_path: None,
             role_context_store: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            context_registry: ContextRegistry::new(),
         }
     }
 
@@ -171,6 +178,18 @@ impl DelegateTool {
     ) -> Self {
         self.role_context_store = store;
         self
+    }
+
+    /// Share an existing context registry so delegate outputs persist
+    /// across agent re-creation within the same session.
+    pub fn with_context_registry(mut self, registry: ContextRegistry) -> Self {
+        self.context_registry = registry;
+        self
+    }
+
+    /// Get a reference to the context registry (for sharing with other tools).
+    pub fn context_registry(&self) -> &ContextRegistry {
+        &self.context_registry
     }
 
     /// Set whether agent selection can auto-resolve from task/context.
@@ -265,14 +284,14 @@ impl DelegateTool {
 #[async_trait]
 impl Tool for DelegateTool {
     fn name(&self) -> &str {
-        "collaborate"
+        "delegate"
     }
 
     fn description(&self) -> &str {
-        "Engage a specialized role agent for collaborative work. Use when: a task benefits from \
-         a different expertise domain (e.g. architecture review, code generation, testing). \
-         The role agent runs a single prompt by default; with agentic=true it can iterate with \
-         a filtered tool-call loop. Role agents are peers that collaborate, not subordinates. \
+        "Delegate a task to a specialized sub-agent. Use when: a subtask should be handed off \
+         to a different model/role for execution (e.g. code generation, review, research). \
+         The sub-agent runs a single prompt by default; with agentic=true it can iterate with \
+         a filtered tool-call loop. Results are returned synchronously. \
          `agent` may be omitted or set to `auto` when team auto-activation is enabled."
     }
 
@@ -286,7 +305,7 @@ impl Tool for DelegateTool {
                     "type": "string",
                     "minLength": 1,
                     "description": format!(
-                        "Name of the role to collaborate with. Available: {}",
+                        "Name of the role to delegate to. Available: {}",
                         if agent_names.is_empty() {
                             "(none configured)".to_string()
                         } else {
@@ -301,7 +320,14 @@ impl Tool for DelegateTool {
                 },
                 "context": {
                     "type": "string",
-                    "description": "Optional context to prepend (e.g. relevant code, prior findings)"
+                    "description": "Optional inline context to prepend (for small/ad-hoc context only)"
+                },
+                "context_refs": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 },
+                    "description": "Reference IDs of prior delegate outputs to include as context. \
+                        Each delegate call returns an assigned context ID. Use this instead of \
+                        re-typing prior outputs to save tokens. Example: [1, 3]"
                 }
             },
             "required": ["prompt"]
@@ -330,6 +356,34 @@ impl Tool for DelegateTool {
             .and_then(|v| v.as_str())
             .map(str::trim)
             .unwrap_or("");
+
+        // Parse context_refs — numeric IDs referencing prior delegate outputs.
+        let context_refs: Vec<u32> = args
+            .get("context_refs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as u32))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Resolve referenced contexts from the registry
+        let (resolved_refs_text, missing_refs) = if context_refs.is_empty() {
+            (String::new(), Vec::new())
+        } else {
+            self.context_registry.resolve_refs(&context_refs).await
+        };
+
+        // Warn about missing references (but continue)
+        let missing_warning = if missing_refs.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n[Warning: context_refs {:?} not found — they may have been evicted]\n",
+                missing_refs
+            )
+        };
 
         let team_settings = self.runtime_team_settings();
         if !team_settings.enabled {
@@ -398,7 +452,7 @@ impl Tool for DelegateTool {
 
         if let Err(error) = self
             .security
-            .enforce_tool_operation(ToolOperation::Act, "collaborate")
+            .enforce_tool_operation(ToolOperation::Act, "delegate")
         {
             return Ok(ToolResult {
                 success: false,
@@ -445,11 +499,24 @@ impl Tool for DelegateTool {
             }
         };
 
-        // Build the message
-        let full_prompt = if context.is_empty() {
-            prompt.to_string()
-        } else {
-            format!("[Context]\n{context}\n\n[Task]\n{prompt}")
+        // Build the message — combine resolved context refs + inline context + task
+        let full_prompt = {
+            let mut parts = Vec::new();
+            if !resolved_refs_text.is_empty() {
+                parts.push(resolved_refs_text);
+            }
+            if !missing_warning.is_empty() {
+                parts.push(missing_warning);
+            }
+            if !context.is_empty() {
+                parts.push(format!("[Inline Context]\n{context}"));
+            }
+            if parts.is_empty() {
+                prompt.to_string()
+            } else {
+                parts.push(format!("[Task]\n{prompt}"));
+                parts.join("\n\n")
+            }
         };
 
         let temperature = agent_config.temperature.unwrap_or(0.7);
@@ -482,6 +549,16 @@ impl Tool for DelegateTool {
             );
             if result.success {
                 load_lease.mark_success();
+                // Auto-register output in context registry for future reference
+                let ctx_id = self
+                    .context_registry
+                    .register(agent_name, prompt, &result.output)
+                    .await;
+                return Ok(ToolResult {
+                    success: true,
+                    output: format!("[context_id: {}]\n{}", ctx_id, result.output),
+                    error: None,
+                });
             } else {
                 load_lease.mark_failure();
             }
@@ -589,9 +666,15 @@ impl Tool for DelegateTool {
                 self.finish_coordination_trace(agent_name, &coordination_trace, true, &output);
                 load_lease.mark_success();
 
+                // Auto-register output in context registry for future reference
+                let ctx_id = self
+                    .context_registry
+                    .register(agent_name, prompt, &output)
+                    .await;
+
                 Ok(ToolResult {
                     success: true,
-                    output,
+                    output: format!("[context_id: {ctx_id}]\n{output}"),
                     error: None,
                 })
             }
@@ -642,14 +725,14 @@ impl DelegateTool {
 
         // Build sub-agent tool list. When `allow_nested_delegate` is true AND
         // there is remaining depth budget, include a child DelegateTool so the
-        // role agent can hand off work to peers. Otherwise exclude `collaborate`.
+        // role agent can hand off work to peers. Otherwise exclude `delegate`.
         let mut sub_tools: Vec<Box<dyn Tool>> = self
             .parent_tools
             .iter()
             .filter(|tool| allowed.contains(tool.name()))
             .filter(|tool| {
-                if tool.name() == "collaborate" {
-                    // Only include collaborate if nested collaboration is explicitly
+                if tool.name() == "delegate" {
+                    // Only include delegate if nested delegation is explicitly
                     // enabled for this agent AND depth budget remains.
                     agent_config.allow_nested_delegate && self.depth + 1 < agent_config.max_depth
                 } else {
@@ -659,10 +742,10 @@ impl DelegateTool {
             .map(|tool| Box::new(ToolArcRef::new(tool.clone())) as Box<dyn Tool>)
             .collect();
 
-        // If nested collaboration is allowed, replace the parent's DelegateTool with
+        // If nested delegation is allowed, replace the parent's DelegateTool with
         // a depth-incremented child instance that shares the same context store.
         if agent_config.allow_nested_delegate && self.depth + 1 < agent_config.max_depth {
-            sub_tools.retain(|tool| tool.name() != "collaborate");
+            sub_tools.retain(|tool| tool.name() != "delegate");
             let child_delegate = DelegateTool {
                 agents: self.agents.clone(),
                 security: self.security.clone(),
@@ -677,6 +760,7 @@ impl DelegateTool {
                 load_tracker: self.load_tracker.clone(),
                 runtime_config_path: self.runtime_config_path.clone(),
                 role_context_store: self.role_context_store.clone(),
+                context_registry: self.context_registry.clone(),
             };
             sub_tools.push(Box::new(child_delegate));
         }
@@ -737,7 +821,7 @@ impl DelegateTool {
                 temperature,
                 true,
                 None,
-                "collaborate",
+                "delegate",
                 &self.multimodal_config,
                 agent_config.max_iterations,
                 None,
@@ -931,6 +1015,36 @@ impl DelegateTool {
                 "delegate coordination: failed to publish completion-state patch for '{agent_name}': {error}"
             );
         }
+
+        // Auto-publish successful delegate output to shared team context so
+        // other roles can read it via the team_context tool.
+        if success {
+            let output_key = format!("delegate/{agent_name}/output");
+            let expected_version = bus
+                .context_entry(&output_key)
+                .map(|e| e.version)
+                .unwrap_or(0);
+            let mut output_patch = CoordinationEnvelope::new_broadcast(
+                agent_name.to_string(),
+                trace.conversation_id.clone(),
+                "delegate.output",
+                CoordinationPayload::ContextPatch {
+                    key: output_key,
+                    expected_version,
+                    value: json!({
+                        "agent": agent_name,
+                        "summary": detail_preview,
+                    }),
+                },
+            );
+            output_patch.correlation_id = Some(trace.correlation_id.clone());
+            output_patch.causation_id = trace.request_message_id.clone();
+            if let Err(error) = bus.publish(output_patch) {
+                tracing::debug!(
+                    "delegate coordination: failed to publish output context for '{agent_name}': {error}"
+                );
+            }
+        }
     }
 }
 
@@ -1058,6 +1172,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
         agents.insert(
@@ -1075,6 +1194,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
         agents
@@ -1270,13 +1394,18 @@ max_concurrent = {subagents_max_concurrent}
             agentic: true,
             allowed_tools,
             max_iterations,
+            role_label: None,
+            role_color: None,
+            role_icon: None,
+            is_preset: false,
+            allow_nested_delegate: false,
         }
     }
 
     #[test]
     fn name_and_schema() {
         let tool = DelegateTool::new(sample_agents(), None, test_security());
-        assert_eq!(tool.name(), "collaborate");
+        assert_eq!(tool.name(), "delegate");
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["agent"].is_object());
         assert!(schema["properties"]["prompt"].is_object());
@@ -1380,6 +1509,11 @@ max_concurrent = {subagents_max_concurrent}
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
         let tool = DelegateTool::new(agents, None, test_security());
@@ -1490,6 +1624,11 @@ max_concurrent = {subagents_max_concurrent}
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
@@ -1571,6 +1710,11 @@ max_concurrent = {subagents_max_concurrent}
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
         let tool = DelegateTool::new(agents, None, test_security());
@@ -1609,6 +1753,11 @@ max_concurrent = {subagents_max_concurrent}
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
         let tool = DelegateTool::new(agents, None, test_security());
@@ -1713,8 +1862,8 @@ max_concurrent = {subagents_max_concurrent}
     }
 
     #[tokio::test]
-    async fn execute_agentic_excludes_collaborate_even_if_allowlisted() {
-        let config = agentic_config(vec!["collaborate".to_string()], 10);
+    async fn execute_agentic_excludes_delegate_even_if_allowlisted() {
+        let config = agentic_config(vec!["delegate".to_string()], 10);
         let tool = DelegateTool::new(HashMap::new(), None, test_security()).with_parent_tools(
             Arc::new(vec![Arc::new(DelegateTool::new(
                 HashMap::new(),
@@ -1795,6 +1944,11 @@ max_concurrent = {subagents_max_concurrent}
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
@@ -1867,6 +2021,11 @@ max_concurrent = {subagents_max_concurrent}
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
         let tool = DelegateTool::new(agents, None, test_security());

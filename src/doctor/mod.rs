@@ -1416,6 +1416,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
         config.agents.insert(
@@ -1433,6 +1438,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 

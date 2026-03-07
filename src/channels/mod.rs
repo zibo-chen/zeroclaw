@@ -5603,8 +5603,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
     ));
     if !config.agents.is_empty() {
         tool_descs.push((
-            "collaborate",
-            "Engage a specialized role agent for collaborative work. Use when: a task benefits from a different expertise domain (e.g. architecture review, code generation, testing). Role agents are peers that collaborate.",
+            "delegate",
+            "Delegate a task to a specialized sub-agent. Returns [context_id: N] — use context_refs to pass prior outputs by reference.",
         ));
         tool_descs.push((
             "subagent_spawn",
@@ -5617,6 +5617,14 @@ pub async fn start_channels(config: Config) -> Result<()> {
         tool_descs.push((
             "subagent_manage",
             "Manage a background sub-agent: 'status' to check progress/output, 'kill' to cancel a running session.",
+        ));
+        tool_descs.push((
+            "subagent_execute",
+            "Execute a sub-agent synchronously, blocking until the result is available. Use for tasks that require the result before continuing.",
+        ));
+        tool_descs.push((
+            "team_context",
+            "Read, write, or list shared team context. Roles share findings, decisions, and intermediate results with each other.",
         ));
     }
 

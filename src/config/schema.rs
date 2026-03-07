@@ -3612,7 +3612,7 @@ fn default_non_cli_excluded_tools() -> Vec<String> {
         "channel_ack_config",
         "pushover",
         "composio",
-        "collaborate",
+        "delegate",
         "screenshot",
         "image_info",
     ]
@@ -9913,6 +9913,11 @@ mod tests {
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
@@ -10049,7 +10054,7 @@ mod tests {
         assert!(!a.allow_sensitive_file_writes);
         assert!(a.non_cli_excluded_tools.contains(&"shell".to_string()));
         assert!(a.non_cli_excluded_tools.contains(&"process".to_string()));
-        assert!(a.non_cli_excluded_tools.contains(&"collaborate".to_string()));
+        assert!(a.non_cli_excluded_tools.contains(&"delegate".to_string()));
     }
 
     #[test]
@@ -10364,6 +10369,7 @@ ws_url = "ws://127.0.0.1:3002"
                 non_cli_natural_language_approval_mode:
                     NonCliNaturalLanguageApprovalMode::RequestConfirm,
                 non_cli_natural_language_approval_mode_by_channel: HashMap::new(),
+                trust_me: false,
             },
             security: SecurityConfig::default(),
             runtime: RuntimeConfig {
@@ -10745,7 +10751,7 @@ max_tool_iterations = 20
 max_history_messages = 80
 parallel_tools = true
 tool_dispatcher = "xml"
-allowed_tools = ["collaborate", "task_plan"]
+allowed_tools = ["delegate", "task_plan"]
 denied_tools = ["shell"]
 "#;
         let parsed: Config = toml::from_str(raw).unwrap();
@@ -10756,7 +10762,7 @@ denied_tools = ["shell"]
         assert_eq!(parsed.agent.tool_dispatcher, "xml");
         assert_eq!(
             parsed.agent.allowed_tools,
-            vec!["collaborate".to_string(), "task_plan".to_string()]
+            vec!["delegate".to_string(), "task_plan".to_string()]
         );
         assert_eq!(parsed.agent.denied_tools, vec!["shell".to_string()]);
     }
@@ -10914,6 +10920,11 @@ denied_tools = ["shell"]
                 agentic: false,
                 allowed_tools: Vec::new(),
                 max_iterations: 10,
+                role_label: None,
+                role_color: None,
+                role_icon: None,
+                is_preset: false,
+                allow_nested_delegate: false,
             },
         );
 
