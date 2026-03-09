@@ -25,9 +25,9 @@ pub enum PluginStatus {
 pub enum PluginOrigin {
     /// Shipped with the binary.
     Bundled,
-    /// Found in `~/.zeroclaw/extensions/`.
+    /// Found in `~/.coraldesk/extensions/`.
     Global,
-    /// Found in `<workspace>/.zeroclaw/extensions/`.
+    /// Found in `<workspace>/.coraldesk/extensions/`.
     Workspace,
 }
 

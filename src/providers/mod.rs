@@ -1228,8 +1228,8 @@ fn create_provider_with_url_and_options(
         "gemini" | "google" | "google-gemini" => {
             let state_dir = options.zeroclaw_dir.clone().unwrap_or_else(|| {
                 directories::UserDirs::new().map_or_else(
-                    || PathBuf::from(".zeroclaw"),
-                    |dirs| dirs.home_dir().join(".zeroclaw"),
+                    || PathBuf::from(".coraldesk"),
+                    |dirs| dirs.home_dir().join(".coraldesk"),
                 )
             });
             let auth_service = AuthService::new(&state_dir, options.secrets_encrypt);

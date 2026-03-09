@@ -316,7 +316,7 @@ async fn normalize_remote_image_once(
 ) -> anyhow::Result<String> {
     let mut request = remote_client
         .get(source)
-        .header(reqwest::header::USER_AGENT, "ZeroClaw/1.0");
+        .header(reqwest::header::USER_AGENT, "CoralDesk/1.0");
     if source_looks_like_qq_media(source) {
         request = request.header(reqwest::header::REFERER, "https://qq.com/");
     }

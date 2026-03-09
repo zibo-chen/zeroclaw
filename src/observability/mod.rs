@@ -1,4 +1,5 @@
 pub mod cost;
+pub mod llm_debug;
 pub mod log;
 pub mod multi;
 pub mod noop;

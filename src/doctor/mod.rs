@@ -878,7 +878,7 @@ fn workspace_probe_path(workspace_dir: &Path) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     workspace_dir.join(format!(
-        ".zeroclaw_doctor_probe_{}_{}",
+        ".coraldesk_doctor_probe_{}_{}",
         std::process::id(),
         nanos
     ))
@@ -1395,7 +1395,7 @@ mod tests {
         assert!(first
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(".zeroclaw_doctor_probe_")));
+            .is_some_and(|name| name.starts_with(".coraldesk_doctor_probe_")));
     }
 
     #[test]

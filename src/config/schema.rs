@@ -196,7 +196,7 @@ impl ProviderApiMode {
 
 /// Top-level ZeroClaw configuration, loaded from `config.toml`.
 ///
-/// Resolution order: `ZEROCLAW_WORKSPACE` env → `active_workspace.toml` marker → `~/.zeroclaw/config.toml`.
+/// Resolution order: `ZEROCLAW_WORKSPACE` env → `active_workspace.toml` marker → `~/.coraldesk/config.toml`.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Config {
     /// Workspace directory - computed from home, not serialized
@@ -785,7 +785,7 @@ pub struct McpConfig {
 // ── Agents IPC ──────────────────────────────────────────────────
 
 fn default_agents_ipc_db_path() -> String {
-    "~/.zeroclaw/agents.db".into()
+    "~/.coraldesk/agents.db".into()
 }
 
 fn default_agents_ipc_staleness_secs() -> u64 {
@@ -3329,8 +3329,8 @@ pub struct PluginsConfig {
     pub deny: Vec<String>,
 
     /// Extra directories to scan for plugins (in addition to the standard locations).
-    /// Standard locations: `<binary_dir>/extensions/`, `~/.zeroclaw/extensions/`,
-    /// `<workspace>/.zeroclaw/extensions/`.
+    /// Standard locations: `<binary_dir>/extensions/`, `~/.coraldesk/extensions/`,
+    /// `<workspace>/.coraldesk/extensions/`.
     #[serde(default)]
     pub load_paths: Vec<String>,
 
@@ -6111,7 +6111,7 @@ pub struct EstopConfig {
 }
 
 fn default_estop_state_file() -> String {
-    "~/.zeroclaw/estop-state.json".to_string()
+    "~/.coraldesk/estop-state.json".to_string()
 }
 
 impl Default for EstopConfig {
@@ -6155,7 +6155,7 @@ pub struct SyscallAnomalyConfig {
     #[serde(default = "default_syscall_anomaly_alert_cooldown_secs")]
     pub alert_cooldown_secs: u64,
 
-    /// Path to syscall anomaly log file (relative to ~/.zeroclaw unless absolute).
+    /// Path to syscall anomaly log file (relative to ~/.coraldesk unless absolute).
     #[serde(default = "default_syscall_anomaly_log_path")]
     pub log_path: String,
 
@@ -6525,7 +6525,7 @@ impl Default for Config {
     fn default() -> Self {
         let home =
             UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
-        let zeroclaw_dir = home.join(".zeroclaw");
+        let zeroclaw_dir = home.join(".coraldesk");
 
         Self {
             workspace_dir: zeroclaw_dir.join("workspace"),
@@ -6600,7 +6600,7 @@ fn default_config_dir() -> Result<PathBuf> {
     let home = UserDirs::new()
         .map(|u| u.home_dir().to_path_buf())
         .context("Could not find home directory")?;
-    Ok(home.join(".zeroclaw"))
+    Ok(home.join(".coraldesk"))
 }
 
 fn active_workspace_state_path(default_dir: &Path) -> PathBuf {
@@ -6799,7 +6799,7 @@ pub(crate) fn resolve_config_dir_for_workspace(workspace_dir: &Path) -> (PathBuf
 
     let legacy_config_dir = workspace_dir
         .parent()
-        .map(|parent| parent.join(".zeroclaw"));
+        .map(|parent| parent.join(".coraldesk"));
     if let Some(legacy_dir) = legacy_config_dir {
         if legacy_dir.join("config.toml").exists() {
             return (legacy_dir, workspace_config_dir);
@@ -11745,7 +11745,7 @@ allowed_sender_ids = ["U111", "U222"]
             phone_number_id: Some("123".into()),
             verify_token: Some("ver".into()),
             app_secret: None,
-            session_path: Some("~/.zeroclaw/state/whatsapp-web/session.db".into()),
+            session_path: Some("~/.coraldesk/state/whatsapp-web/session.db".into()),
             pair_phone: None,
             pair_code: None,
             allowed_numbers: vec!["+1".into()],
@@ -11761,7 +11761,7 @@ allowed_sender_ids = ["U111", "U222"]
             phone_number_id: None,
             verify_token: None,
             app_secret: None,
-            session_path: Some("~/.zeroclaw/state/whatsapp-web/session.db".into()),
+            session_path: Some("~/.coraldesk/state/whatsapp-web/session.db".into()),
             pair_phone: None,
             pair_code: None,
             allowed_numbers: vec![],
@@ -13337,7 +13337,7 @@ provider_api = "not-a-real-mode"
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap());
         let non_temp_root = base.join(format!("zeroclaw_marker_guard_{}", uuid::Uuid::new_v4()));
-        let default_config_dir = non_temp_root.join(".zeroclaw");
+        let default_config_dir = non_temp_root.join(".coraldesk");
         let default_workspace_dir = default_config_dir.join("workspace");
         let marker_config_dir = std::env::temp_dir().join(format!(
             "zeroclaw_temp_marker_profile_{}",
@@ -13430,7 +13430,7 @@ provider_api = "not-a-real-mode"
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
         let workspace_dir = temp_home.join("workspace");
-        let legacy_config_path = temp_home.join(".zeroclaw").join("config.toml");
+        let legacy_config_path = temp_home.join(".coraldesk").join("config.toml");
 
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &temp_home);
@@ -13457,7 +13457,7 @@ provider_api = "not-a-real-mode"
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
         let workspace_dir = temp_home.join("custom-workspace");
-        let legacy_config_dir = temp_home.join(".zeroclaw");
+        let legacy_config_dir = temp_home.join(".coraldesk");
         let legacy_config_path = legacy_config_dir.join("config.toml");
 
         fs::create_dir_all(&legacy_config_dir).await.unwrap();
@@ -13568,7 +13568,7 @@ default_model = "legacy-model"
         let _env_guard = env_override_lock().await;
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
-        let default_config_dir = temp_home.join(".zeroclaw");
+        let default_config_dir = temp_home.join(".coraldesk");
         let custom_config_dir = temp_home.join("profiles").join("custom-profile");
         let marker_path = default_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE);
 
@@ -14742,7 +14742,7 @@ gated_domain_categories = ["banking"]
 
 [security.estop]
 enabled = true
-state_file = "~/.zeroclaw/estop-state.json"
+state_file = "~/.coraldesk/estop-state.json"
 require_otp_to_resume = true
 
 [security.syscall_anomaly]

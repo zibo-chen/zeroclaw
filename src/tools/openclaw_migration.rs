@@ -128,7 +128,7 @@ impl Tool for OpenClawMigrationTool {
     }
 
     fn description(&self) -> &str {
-        "Preview or execute merge-first migration from OpenClaw (memory + config + agents) without overwriting existing ZeroClaw data."
+        "Preview or execute merge-first migration from OpenClaw (memory + config + agents) without overwriting existing CoralDesk data."
     }
 
     fn parameters_schema(&self) -> Value {

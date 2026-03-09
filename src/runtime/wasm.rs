@@ -697,7 +697,7 @@ impl RuntimeAdapter for WasmRuntime {
     fn storage_path(&self) -> PathBuf {
         self.workspace_dir
             .as_ref()
-            .map_or_else(|| PathBuf::from(".zeroclaw"), |w| w.join(".zeroclaw"))
+            .map_or_else(|| PathBuf::from(".coraldesk"), |w| w.join(".coraldesk"))
     }
 
     fn supports_long_running(&self) -> bool {
@@ -801,7 +801,7 @@ mod tests {
         let rt = WasmRuntime::with_workspace(default_config(), PathBuf::from("/home/user/project"));
         assert_eq!(
             rt.storage_path(),
-            PathBuf::from("/home/user/project/.zeroclaw")
+            PathBuf::from("/home/user/project/.coraldesk")
         );
     }
 

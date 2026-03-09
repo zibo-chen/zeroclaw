@@ -711,7 +711,7 @@ fn resolve_quick_setup_dirs_with_home(home: &Path) -> (PathBuf, PathBuf) {
         }
     }
 
-    let config_dir = home.join(".zeroclaw");
+    let config_dir = home.join(".coraldesk");
     (config_dir.clone(), config_dir.join("workspace"))
 }
 
@@ -822,7 +822,7 @@ async fn run_quick_setup_with_home(
     let default_ctx = ProjectContext {
         user_name: std::env::var("USER").unwrap_or_else(|_| "User".into()),
         timezone: "UTC".into(),
-        agent_name: "ZeroClaw".into(),
+        agent_name: "CoralDesk".into(),
         communication_style:
             "Be warm, natural, and clear. Use occasional relevant emojis (1-2 max) and avoid robotic phrasing."
                 .into(),
@@ -946,7 +946,7 @@ async fn run_quick_setup_with_home(
                     fallback_env_vars.join(", ")
                 );
             }
-            println!("    2. Or edit:           ~/.zeroclaw/config.toml");
+            println!("    2. Or edit:           ~/.coraldesk/config.toml");
             println!("    3. Chat:              zeroclaw agent -m \"Hello!\"");
             println!("    4. Gateway:           zeroclaw gateway");
         }
@@ -3907,7 +3907,7 @@ fn setup_tool_mode() -> Result<(ComposioConfig, SecretsConfig)> {
             style("— 1000+ OAuth integrations (Gmail, Notion, GitHub, Slack, ...)").dim()
         );
         print_bullet("Get your API key at: https://app.composio.dev/settings");
-        print_bullet("ZeroClaw uses Composio as a tool — your core agent stays local.");
+        print_bullet("CoralDesk uses Composio as a tool — your core agent stays local.");
         println!();
 
         let api_key: String = Input::with_theme(wizard_theme())
@@ -5216,7 +5216,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
 
                     let session_path: String = Input::with_theme(wizard_theme())
                         .with_prompt("  Session database path")
-                        .default("~/.zeroclaw/state/whatsapp-web/session.db".into())
+                        .default("~/.coraldesk/state/whatsapp-web/session.db".into())
                         .interact_text()?;
 
                     if session_path.trim().is_empty() {
@@ -7164,7 +7164,7 @@ mod tests {
     #[tokio::test]
     async fn quick_setup_existing_config_requires_force_when_non_interactive() {
         let tmp = TempDir::new().unwrap();
-        let zeroclaw_dir = tmp.path().join(".zeroclaw");
+        let zeroclaw_dir = tmp.path().join(".coraldesk");
         let config_path = zeroclaw_dir.join("config.toml");
 
         tokio::fs::create_dir_all(&zeroclaw_dir).await.unwrap();
@@ -7192,7 +7192,7 @@ mod tests {
     #[tokio::test]
     async fn quick_setup_existing_config_overwrites_with_force() {
         let tmp = TempDir::new().unwrap();
-        let zeroclaw_dir = tmp.path().join(".zeroclaw");
+        let zeroclaw_dir = tmp.path().join(".coraldesk");
         let config_path = zeroclaw_dir.join("config.toml");
 
         tokio::fs::create_dir_all(&zeroclaw_dir).await.unwrap();
@@ -7230,7 +7230,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let workspace_root = tmp.path().join("zeroclaw-data");
         let workspace_dir = workspace_root.join("workspace");
-        let expected_config_path = workspace_root.join(".zeroclaw").join("config.toml");
+        let expected_config_path = workspace_root.join(".coraldesk").join("config.toml");
 
         let _workspace_env = EnvVarGuard::set(
             "ZEROCLAW_WORKSPACE",

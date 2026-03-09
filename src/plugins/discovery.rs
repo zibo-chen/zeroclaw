@@ -78,8 +78,8 @@ fn scan_dir(dir: &Path, origin: PluginOrigin) -> (Vec<DiscoveredPlugin>, Vec<Plu
 ///
 /// Search order (later wins on ID conflict, matching OpenClaw's precedence):
 /// 1. Bundled: `<binary_dir>/extensions/`
-/// 2. Global: `~/.zeroclaw/extensions/`
-/// 3. Workspace: `<workspace>/.zeroclaw/extensions/`
+/// 2. Global: `~/.coraldesk/extensions/`
+/// 3. Workspace: `<workspace>/.coraldesk/extensions/`
 /// 4. Extra paths from config `[plugins] load_paths`
 pub fn discover_plugins(workspace_dir: Option<&Path>, extra_paths: &[PathBuf]) -> DiscoveryResult {
     let mut all_plugins = Vec::new();
@@ -95,17 +95,17 @@ pub fn discover_plugins(workspace_dir: Option<&Path>, extra_paths: &[PathBuf]) -
         }
     }
 
-    // 2. Global — ~/.zeroclaw/extensions/
+    // 2. Global — ~/.coraldesk/extensions/
     if let Some(home) = dirs_home() {
-        let global = home.join(".zeroclaw").join("extensions");
+        let global = home.join(".coraldesk").join("extensions");
         let (p, d) = scan_dir(&global, PluginOrigin::Global);
         all_plugins.extend(p);
         all_diagnostics.extend(d);
     }
 
-    // 3. Workspace — <workspace>/.zeroclaw/extensions/
+    // 3. Workspace — <workspace>/.coraldesk/extensions/
     if let Some(ws) = workspace_dir {
-        let ws_ext = ws.join(".zeroclaw").join("extensions");
+        let ws_ext = ws.join(".coraldesk").join("extensions");
         let (p, d) = scan_dir(&ws_ext, PluginOrigin::Workspace);
         all_plugins.extend(p);
         all_diagnostics.extend(d);
@@ -169,7 +169,7 @@ version = "0.1.0"
     fn discover_from_workspace() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("project");
-        let ext_dir = ws.join(".zeroclaw").join("extensions");
+        let ext_dir = ws.join(".coraldesk").join("extensions");
         fs::create_dir_all(&ext_dir).unwrap();
         make_plugin_dir(&ext_dir, "my-plugin");
 

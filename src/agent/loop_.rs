@@ -4,7 +4,7 @@ use crate::config::{Config, ProgressMode};
 use crate::cost::{BudgetCheck, CostTracker, UsagePeriod};
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::multimodal;
-use crate::observability::{self, runtime_trace, Observer, ObserverEvent};
+use crate::observability::{self, llm_debug, runtime_trace, Observer, ObserverEvent};
 use crate::providers::{
     self, ChatMessage, ChatRequest, NormalizedStopReason, Provider, ProviderCapabilityError,
     ToolCall,
@@ -1574,6 +1574,22 @@ pub async fn run_tool_call_loop(
             }),
         );
 
+        // ── LLM Debug: record full request ──
+        let llm_debug_tool_names: Option<Vec<String>> = if tool_specs.is_empty() {
+            None
+        } else {
+            Some(tool_specs.iter().map(|t| t.name.clone()).collect())
+        };
+        let _llm_debug_request_id = llm_debug::record_request(
+            Some(channel_name),
+            provider_name,
+            active_model.as_str(),
+            temperature,
+            iteration,
+            &request_messages,
+            llm_debug_tool_names.clone(),
+        );
+
         let llm_started_at = Instant::now();
 
         // Fire void hook before LLM call
@@ -1980,6 +1996,33 @@ pub async fn run_tool_call_loop(
                     }),
                 );
 
+                // ── LLM Debug: record full response (success) ──
+                {
+                    let debug_tool_calls: Vec<(String, String)> = native_calls
+                        .iter()
+                        .map(|tc| (tc.name.clone(), tc.arguments.clone()))
+                        .chain(calls.iter().map(|c| (c.name.clone(), c.arguments.to_string())))
+                        .collect();
+                    llm_debug::record_response(
+                        _llm_debug_request_id.as_deref(),
+                        Some(channel_name),
+                        provider_name,
+                        active_model.as_str(),
+                        temperature,
+                        iteration,
+                        &request_messages,
+                        llm_debug_tool_names.clone(),
+                        &response_text,
+                        &debug_tool_calls,
+                        resp_input_tokens,
+                        resp_output_tokens,
+                        llm_started_at.elapsed().as_millis(),
+                        true,
+                        None,
+                        stop_reason.as_ref().map(stop_reason_name),
+                    );
+                }
+
                 // Preserve native tool call IDs in assistant history so role=tool
                 // follow-up messages can reference the exact call id.
                 let assistant_history_content = if native_calls.is_empty() {
@@ -2034,6 +2077,25 @@ pub async fn run_tool_call_loop(
                         "iteration": iteration + 1,
                         "duration_ms": llm_started_at.elapsed().as_millis(),
                     }),
+                );
+                // ── LLM Debug: record error response ──
+                llm_debug::record_response(
+                    _llm_debug_request_id.as_deref(),
+                    Some(channel_name),
+                    provider_name,
+                    active_model.as_str(),
+                    temperature,
+                    iteration,
+                    &request_messages,
+                    llm_debug_tool_names.clone(),
+                    "",
+                    &[],
+                    None,
+                    None,
+                    llm_started_at.elapsed().as_millis(),
+                    false,
+                    Some(&safe_error),
+                    None,
                 );
                 return Err(e);
             }

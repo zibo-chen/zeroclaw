@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 
-const SERVICE_LABEL: &str = "com.zeroclaw.daemon";
+const SERVICE_LABEL: &str = "com.coraldesk.daemon";
 const WINDOWS_TASK_NAME: &str = "ZeroClaw Daemon";
 
 /// Supported init systems for service management
@@ -698,7 +698,7 @@ fn resolve_invoking_user_config_dir() -> Option<PathBuf> {
                 let entry = String::from_utf8_lossy(&output.stdout);
                 let fields: Vec<&str> = entry.trim().split(':').collect();
                 if fields.len() >= 6 {
-                    return Some(PathBuf::from(fields[5]).join(".zeroclaw"));
+                    return Some(PathBuf::from(fields[5]).join(".coraldesk"));
                 }
             }
         }
@@ -707,7 +707,7 @@ fn resolve_invoking_user_config_dir() -> Option<PathBuf> {
     std::env::var("HOME")
         .ok()
         .map(PathBuf::from)
-        .map(|home| home.join(".zeroclaw"))
+        .map(|home| home.join(".coraldesk"))
 }
 
 fn migrate_openrc_runtime_state_if_needed(config_dir: &Path) -> Result<()> {

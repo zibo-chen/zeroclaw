@@ -156,7 +156,7 @@ impl GitHubChannel {
                 .bearer_auth(&self.access_token)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-                .header("User-Agent", "ZeroClaw-GitHub-Channel")
+                .header("User-Agent", "CoralDesk-GitHub-Channel")
                 .json(&payload)
                 .send()
                 .await?;
@@ -476,7 +476,7 @@ impl Channel for GitHubChannel {
             .bearer_auth(&self.access_token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-            .header("User-Agent", "ZeroClaw-GitHub-Channel")
+            .header("User-Agent", "CoralDesk-GitHub-Channel")
             .send()
             .await
             .map(|resp| resp.status().is_success())
