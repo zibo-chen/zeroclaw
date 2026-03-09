@@ -271,12 +271,52 @@ impl Agent {
         &self.tool_specs
     }
 
+    /// Dynamically add extra tools (e.g. MCP tools that were connected
+    /// asynchronously after the synchronous `from_config` build).
+    /// This updates both the executable tool list and the spec cache so
+    /// the system prompt and native tool-calling schemas include them.
+    pub fn add_tools(&mut self, extra: Vec<Box<dyn Tool>>) {
+        for tool in extra {
+            self.tool_specs.push(tool.spec());
+            self.tools.push(tool);
+        }
+    }
+
     pub fn history(&self) -> &[ConversationMessage] {
         &self.history
     }
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+    }
+
+    /// Truncate history to keep only the first `n` complete user turns.
+    ///
+    /// A "user turn" starts with a user message and includes everything
+    /// that follows (assistant response, tool calls, tool results) until
+    /// the next user message.  The system prompt (if present as the first
+    /// entry) is always preserved.
+    ///
+    /// This is used by the retry / edit flow so that the Rust-side agent
+    /// history stays in sync with the Flutter-side message list after
+    /// truncation.
+    pub fn truncate_to_n_user_turns(&mut self, n: usize) {
+        let mut user_count = 0;
+        let mut truncate_at = self.history.len();
+
+        for (i, msg) in self.history.iter().enumerate() {
+            if let ConversationMessage::Chat(chat_msg) = msg {
+                if chat_msg.role == "user" {
+                    user_count += 1;
+                    if user_count > n {
+                        truncate_at = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.history.truncate(truncate_at);
     }
 
     /// Streaming turn: same as `turn()` but sends progress events through an

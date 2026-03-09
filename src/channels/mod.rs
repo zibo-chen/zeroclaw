@@ -5507,6 +5507,9 @@ pub async fn start_channels(config: Config) -> Result<()> {
     );
 
     // Wire MCP tools into the registry before freezing — non-fatal.
+    // We also collect (name, description) for each MCP tool so that the
+    // system prompt advertises them to the LLM.
+    let mut mcp_tool_descs: Vec<(String, String)> = Vec::new();
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
         tracing::info!(
             "Initializing MCP client — {} server(s) configured",
@@ -5519,6 +5522,13 @@ pub async fn start_channels(config: Config) -> Result<()> {
                 let mut registered = 0usize;
                 for name in names {
                     if let Some(def) = registry.get_tool_def(&name).await {
+                        // Capture description for the system prompt.
+                        let desc = def
+                            .description
+                            .clone()
+                            .unwrap_or_else(|| "MCP tool".to_string());
+                        mcp_tool_descs.push((name.clone(), desc));
+
                         let wrapper = crate::tools::McpToolWrapper::new(
                             name,
                             def,
@@ -5628,12 +5638,33 @@ pub async fn start_channels(config: Config) -> Result<()> {
         ));
     }
 
+    // Append MCP tool descriptions so the LLM knows they exist.
+    // We need owned Strings because mcp_tool_descs is Vec<(String, String)>,
+    // while tool_descs uses &str.  We convert tool_descs to owned form.
+    let mut tool_descs_owned: Vec<(String, String)> = tool_descs
+        .into_iter()
+        .map(|(n, d)| (n.to_string(), d.to_string()))
+        .collect();
+    if !mcp_tool_descs.is_empty() {
+        tool_descs_owned.extend(mcp_tool_descs);
+    }
+    // Rebuild as references for downstream APIs.
+    let tool_descs: Vec<(&str, &str)> = tool_descs_owned
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_str()))
+        .collect();
+
     // Filter out tools excluded for non-CLI channels so the system prompt
     // does not advertise them for channel-driven runs.
     let excluded = &config.autonomy.non_cli_excluded_tools;
     if !excluded.is_empty() {
-        tool_descs.retain(|(name, _)| !excluded.iter().any(|ex| ex == name));
+        // Need to filter the owned vec and re-derive references.
+        tool_descs_owned.retain(|(name, _)| !excluded.iter().any(|ex| ex == name));
     }
+    let tool_descs: Vec<(&str, &str)> = tool_descs_owned
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_str()))
+        .collect();
 
     let bootstrap_max_chars = if config.agent.compact_context {
         Some(6000)
