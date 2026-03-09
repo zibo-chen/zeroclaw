@@ -71,7 +71,7 @@ const STREAM_CHUNK_MIN_CHARS: usize = 80;
 
 /// Default maximum agentic tool-use iterations per user message to prevent runaway loops.
 /// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
-const DEFAULT_MAX_TOOL_ITERATIONS: usize = 20;
+const DEFAULT_MAX_TOOL_ITERATIONS: usize = 50;
 
 /// Maximum continuation retries when a provider reports max-token truncation.
 const MAX_TOKENS_CONTINUATION_MAX_ATTEMPTS: usize = 3;
@@ -2001,7 +2001,11 @@ pub async fn run_tool_call_loop(
                     let debug_tool_calls: Vec<(String, String)> = native_calls
                         .iter()
                         .map(|tc| (tc.name.clone(), tc.arguments.clone()))
-                        .chain(calls.iter().map(|c| (c.name.clone(), c.arguments.to_string())))
+                        .chain(
+                            calls
+                                .iter()
+                                .map(|c| (c.name.clone(), c.arguments.to_string())),
+                        )
                         .collect();
                     llm_debug::record_response(
                         _llm_debug_request_id.as_deref(),
