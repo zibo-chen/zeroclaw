@@ -4656,11 +4656,35 @@ pub fn build_system_prompt_with_mode(
     // ── 7. Runtime ──────────────────────────────────────────────
     let host =
         hostname::get().map_or_else(|_| "unknown".into(), |h| h.to_string_lossy().to_string());
+    let os_name = std::env::consts::OS;
     let _ = writeln!(
         prompt,
-        "## Runtime\n\nHost: {host} | OS: {} | Model: {model_name}\n",
-        std::env::consts::OS,
+        "## Runtime\n\nHost: {host} | OS: {os_name} | Model: {model_name}\n",
     );
+
+    // ── 7a. Shell Command Syntax (OS-specific) ──────────────────
+    if os_name == "windows" {
+        prompt.push_str("## Shell Command Syntax\n\n");
+        prompt.push_str(
+            "You are running on **Windows**. Use **PowerShell** syntax for shell commands:\n\n",
+        );
+        prompt.push_str("| Task | PowerShell Command |\n");
+        prompt.push_str("|------|-------------------|\n");
+        prompt.push_str("| List files | `Get-ChildItem` or `dir` |\n");
+        prompt.push_str("| Read file | `Get-Content file.txt` |\n");
+        prompt.push_str("| Delete file | `Remove-Item file.txt` |\n");
+        prompt.push_str("| Delete directory | `Remove-Item -Recurse -Force dir` |\n");
+        prompt.push_str("| Copy file | `Copy-Item src dst` |\n");
+        prompt.push_str("| Move file | `Move-Item src dst` |\n");
+        prompt.push_str("| Create directory | `New-Item -ItemType Directory name` |\n");
+        prompt.push_str("| Search text | `Select-String -Pattern 'text' file.txt` |\n");
+        prompt.push_str("| Find files | `Get-ChildItem -Recurse -Filter '*.ext'` |\n");
+        prompt.push_str("| Environment var | `$env:VARNAME` |\n");
+        prompt.push_str("| Current dir | `Get-Location` or `pwd` |\n");
+        prompt.push_str("| Chain commands | Use `;` instead of `&&` |\n\n");
+        prompt.push_str("**Important**: Do NOT use Unix/Linux commands like `ls`, `cat`, `rm`, `grep`, `find` on Windows.\n");
+        prompt.push_str("Use PowerShell equivalents shown above.\n\n");
+    }
 
     // ── 8. Channel Capabilities ─────────────────────────────────────
     prompt.push_str("## Channel Capabilities\n\n");

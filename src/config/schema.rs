@@ -3712,6 +3712,21 @@ pub struct RuntimeConfig {
     #[serde(default = "default_runtime_kind")]
     pub kind: String,
 
+    /// Preferred shell for command execution on Windows.
+    ///
+    /// **Windows only**: Controls which shell is used to execute commands.
+    /// - `powershell` (recommended): Use Windows PowerShell for native Windows commands
+    /// - `pwsh`: Use PowerShell Core (cross-platform)
+    /// - `bash`: Use Git Bash or WSL bash (for Unix-style commands)
+    /// - `cmd`: Use Command Prompt
+    /// - `auto` (default): Auto-detect in order: bash, pwsh, powershell, cmd
+    ///
+    /// **Note**: This also affects the command syntax the LLM should generate.
+    /// When set to `powershell` or `pwsh`, the system prompt will instruct the
+    /// LLM to use PowerShell syntax instead of Unix/bash commands.
+    #[serde(default)]
+    pub preferred_shell: Option<String>,
+
     /// Docker runtime settings (used when `kind = "docker"`).
     #[serde(default)]
     pub docker: DockerRuntimeConfig,
@@ -3943,6 +3958,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             kind: default_runtime_kind(),
+            preferred_shell: None,
             docker: DockerRuntimeConfig::default(),
             wasm: WasmRuntimeConfig::default(),
             reasoning_enabled: None,

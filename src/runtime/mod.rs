@@ -14,7 +14,9 @@ use crate::config::RuntimeConfig;
 /// Factory: create the right runtime from config
 pub fn create_runtime(config: &RuntimeConfig) -> anyhow::Result<Box<dyn RuntimeAdapter>> {
     match config.kind.as_str() {
-        "native" => Ok(Box::new(NativeRuntime::new())),
+        "native" => Ok(Box::new(NativeRuntime::with_preferred_shell(
+            config.preferred_shell.as_deref(),
+        ))),
         "docker" => Ok(Box::new(DockerRuntime::new(config.docker.clone()))),
         "wasm" => Ok(Box::new(WasmRuntime::new(config.wasm.clone()))),
         "cloudflare" => anyhow::bail!(

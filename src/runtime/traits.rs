@@ -72,6 +72,21 @@ pub trait RuntimeAdapter: Send + Sync {
         command: &str,
         workspace_dir: &Path,
     ) -> anyhow::Result<tokio::process::Command>;
+
+    /// Return a hint about the shell type for use in system prompts.
+    ///
+    /// This helps the LLM generate commands using the correct syntax:
+    /// - PowerShell: `Get-ChildItem`, `Get-Content`, `Remove-Item`
+    /// - Unix/bash: `ls`, `cat`, `rm`
+    /// - Command Prompt: `dir`, `type`, `del`
+    fn shell_prompt_hint(&self) -> &'static str {
+        "Unix shell (use standard Unix commands)"
+    }
+
+    /// Return true if the shell uses PowerShell syntax.
+    fn is_powershell_shell(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
