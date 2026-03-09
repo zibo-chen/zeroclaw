@@ -177,12 +177,13 @@ async fn download_binary(asset: &Asset, temp_dir: &Path) -> Result<PathBuf> {
 
 /// Extract a tar.gz archive
 fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<()> {
-    let output = Command::new("tar")
-        .arg("-xzf")
+    let mut cmd = Command::new("tar");
+    cmd.arg("-xzf")
         .arg(archive_path)
         .arg("-C")
-        .arg(dest_dir)
-        .output()
+        .arg(dest_dir);
+    crate::runtime::hide_windows_console_std(&mut cmd);
+    let output = cmd.output()
         .context("Failed to execute tar command")?;
 
     if !output.status.success() {
@@ -197,12 +198,34 @@ fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<()> {
 
 /// Extract a zip archive
 fn extract_zip(archive_path: &Path, dest_dir: &Path) -> Result<()> {
-    let output = Command::new("unzip")
-        .arg("-o")
-        .arg(archive_path)
-        .arg("-d")
-        .arg(dest_dir)
-        .output()
+    // On Windows, use PowerShell's Expand-Archive since unzip may not be available
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = Command::new("powershell");
+        c.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!(
+                "Expand-Archive -Force -Path '{}' -DestinationPath '{}'",
+                archive_path.display(),
+                dest_dir.display()
+            ),
+        ]);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut c = Command::new("unzip");
+        c.arg("-o")
+            .arg(archive_path)
+            .arg("-d")
+            .arg(dest_dir);
+        c
+    };
+    crate::runtime::hide_windows_console_std(&mut cmd);
+    let output = cmd.output()
         .context("Failed to execute unzip command")?;
 
     if !output.status.success() {

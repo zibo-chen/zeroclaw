@@ -36,10 +36,10 @@ impl Tunnel for TailscaleTunnel {
             h.clone()
         } else {
             // Query tailscale for the current hostname
-            let output = Command::new("tailscale")
-                .args(["status", "--json"])
-                .output()
-                .await?;
+            let mut cmd = Command::new("tailscale");
+            cmd.args(["status", "--json"]);
+            crate::runtime::hide_windows_console(&mut cmd);
+            let output = cmd.output().await?;
 
             if !output.status.success() {
                 bail!(
@@ -58,12 +58,15 @@ impl Tunnel for TailscaleTunnel {
         };
 
         // tailscale serve|funnel <port>
-        let child = Command::new("tailscale")
-            .args([subcommand, &local_port.to_string()])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+        let child = {
+            let mut cmd = Command::new("tailscale");
+            cmd.args([subcommand, &local_port.to_string()])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true);
+            crate::runtime::hide_windows_console(&mut cmd);
+            cmd.spawn()?
+        };
 
         let public_url = format!("https://{hostname}:{local_port}");
 
@@ -79,9 +82,10 @@ impl Tunnel for TailscaleTunnel {
     async fn stop(&self) -> Result<()> {
         // Also reset the tailscale serve/funnel
         let subcommand = if self.funnel { "funnel" } else { "serve" };
-        Command::new("tailscale")
-            .args([subcommand, "reset"])
-            .output()
+        let mut cmd = Command::new("tailscale");
+        cmd.args([subcommand, "reset"]);
+        crate::runtime::hide_windows_console(&mut cmd);
+        cmd.output()
             .await
             .ok();
 

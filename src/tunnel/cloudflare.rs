@@ -29,8 +29,9 @@ impl Tunnel for CloudflareTunnel {
 
     async fn start(&self, _local_host: &str, local_port: u16) -> Result<String> {
         // cloudflared tunnel --no-autoupdate run --token <TOKEN> --url http://localhost:<port>
-        let mut child = Command::new("cloudflared")
-            .args([
+        let mut child = {
+            let mut cmd = Command::new("cloudflared");
+            cmd.args([
                 "tunnel",
                 "--no-autoupdate",
                 "run",
@@ -41,8 +42,10 @@ impl Tunnel for CloudflareTunnel {
             ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+            crate::runtime::hide_windows_console(&mut cmd);
+            cmd.spawn()?
+        };
 
         // Read stderr to find the public URL (cloudflared prints it there)
         let stderr = child

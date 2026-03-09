@@ -121,6 +121,7 @@ async fn open_url_in_default_browser(url: &str) -> Result<()> {
     let mut command = {
         let mut command = tokio::process::Command::new("cmd");
         command.args(["/C", "start", "", url]);
+        crate::runtime::hide_windows_console(&mut command);
         command
     };
 

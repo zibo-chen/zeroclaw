@@ -210,6 +210,7 @@ impl AcpChannel {
         command.stdout(std::process::Stdio::piped());
         // Inherit stderr so the child cannot block on an unread stderr pipe.
         command.stderr(std::process::Stdio::inherit());
+        crate::runtime::hide_windows_console(&mut command);
 
         let mut child = command
             .spawn()

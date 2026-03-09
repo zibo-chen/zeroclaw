@@ -52,12 +52,15 @@ impl Tunnel for CustomTunnel {
             bail!("Custom tunnel start_command is empty");
         }
 
-        let mut child = Command::new(parts[0])
-            .args(&parts[1..])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+        let mut child = {
+            let mut cmd = Command::new(parts[0]);
+            cmd.args(&parts[1..])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true);
+            crate::runtime::hide_windows_console(&mut cmd);
+            cmd.spawn()?
+        };
 
         let mut public_url = format!("http://{local_host}:{local_port}");
 

@@ -360,15 +360,27 @@ impl ProcessTool {
             }
         };
 
-        // Send SIGTERM via kill command.
-        let kill_result = std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .output();
+        // Send SIGTERM (Unix) or taskkill (Windows) to terminate the process.
+        let kill_result = {
+            #[cfg(target_os = "windows")]
+            {
+                let mut cmd = std::process::Command::new("taskkill");
+                cmd.args(["/PID", &pid.to_string(), "/F"]);
+                crate::runtime::hide_windows_console_std(&mut cmd);
+                cmd.output()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::process::Command::new("kill")
+                    .arg(pid.to_string())
+                    .output()
+            }
+        };
 
         match kill_result {
             Ok(output) if output.status.success() => Ok(ToolResult {
                 success: true,
-                output: format!("Sent SIGTERM to process {id} (pid {pid})"),
+                output: format!("Terminated process {id} (pid {pid})"),
                 error: None,
             }),
             Ok(output) => {

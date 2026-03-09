@@ -31,10 +31,10 @@ impl Tunnel for NgrokTunnel {
 
     async fn start(&self, _local_host: &str, local_port: u16) -> Result<String> {
         // Set auth token
-        Command::new("ngrok")
-            .args(["config", "add-authtoken", &self.auth_token])
-            .output()
-            .await?;
+        let mut auth_cmd = Command::new("ngrok");
+        auth_cmd.args(["config", "add-authtoken", &self.auth_token]);
+        crate::runtime::hide_windows_console(&mut auth_cmd);
+        auth_cmd.output().await?;
 
         // Build command: ngrok http <port> [--domain <domain>]
         let mut args = vec!["http".to_string(), local_port.to_string()];
@@ -48,12 +48,15 @@ impl Tunnel for NgrokTunnel {
         args.push("--log-format".into());
         args.push("logfmt".into());
 
-        let mut child = Command::new("ngrok")
-            .args(&args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+        let mut child = {
+            let mut cmd = Command::new("ngrok");
+            cmd.args(&args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true);
+            crate::runtime::hide_windows_console(&mut cmd);
+            cmd.spawn()?
+        };
 
         let stdout = child
             .stdout

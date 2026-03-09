@@ -387,12 +387,24 @@ impl Tool for SkillToolHandler {
             "Executing skill tool"
         );
 
-        let output = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .output()
-            .await
-            .context("Failed to execute skill tool command")?;
+        let output = {
+            #[cfg(target_os = "windows")]
+            let mut cmd = {
+                let mut c = tokio::process::Command::new("cmd");
+                c.arg("/C").arg(&command);
+                c
+            };
+            #[cfg(not(target_os = "windows"))]
+            let mut cmd = {
+                let mut c = tokio::process::Command::new("sh");
+                c.arg("-c").arg(&command);
+                c
+            };
+            crate::runtime::hide_windows_console(&mut cmd);
+            cmd.output()
+                .await
+                .context("Failed to execute skill tool command")?
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

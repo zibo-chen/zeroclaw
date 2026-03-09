@@ -517,10 +517,13 @@ fn clone_open_skills_repo(repo_dir: &Path) -> bool {
         }
     }
 
-    let output = Command::new("git")
-        .args(["clone", "--depth", "1", OPEN_SKILLS_REPO_URL])
-        .arg(repo_dir)
-        .output();
+    let output = {
+        let mut cmd = Command::new("git");
+        cmd.args(["clone", "--depth", "1", OPEN_SKILLS_REPO_URL])
+            .arg(repo_dir);
+        crate::runtime::hide_windows_console_std(&mut cmd);
+        cmd.output()
+    };
 
     match output {
         Ok(result) if result.status.success() => {
@@ -545,11 +548,12 @@ fn pull_open_skills_repo(repo_dir: &Path) -> bool {
         return true;
     }
 
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .args(["pull", "--ff-only"])
-        .output();
+    let output = {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(repo_dir).args(["pull", "--ff-only"]);
+        crate::runtime::hide_windows_console_std(&mut cmd);
+        cmd.output()
+    };
 
     match output {
         Ok(result) if result.status.success() => true,
@@ -1188,10 +1192,13 @@ fn install_git_skill_source(
     allow_scripts: bool,
 ) -> Result<(PathBuf, usize)> {
     let before = snapshot_skill_children(skills_path)?;
-    let output = std::process::Command::new("git")
-        .args(["clone", "--depth", "1", source])
-        .current_dir(skills_path)
-        .output()?;
+    let output = {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["clone", "--depth", "1", source])
+            .current_dir(skills_path);
+        crate::runtime::hide_windows_console_std(&mut cmd);
+        cmd.output()?
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Git clone failed: {stderr}");
@@ -1386,31 +1393,34 @@ pub fn test_skill_locally(
     println!();
 
     // Run via wasmtime CLI (captures stdout as tool output)
-    let output = std::process::Command::new("wasmtime")
-        .arg("run")
-        .arg(&wasm_path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context(
-            "wasmtime not found — install it first:\n\n\
+    let output = {
+        let mut cmd = std::process::Command::new("wasmtime");
+        cmd.arg("run")
+            .arg(&wasm_path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        crate::runtime::hide_windows_console_std(&mut cmd);
+        cmd.spawn()
+            .context(
+                "wasmtime not found — install it first:\n\n\
              \x20 macOS (Homebrew):  brew install wasmtime\n\
              \x20 macOS/Linux:       curl https://wasmtime.dev/install.sh -sSf | bash\n\
              \x20 Cargo (slow):      cargo install wasmtime-cli\n\n\
              After installing, restart your terminal and run this command again.\n\
              Docs: https://wasmtime.dev",
-        )
-        .and_then(|mut child| {
-            use std::io::Write;
-            // take() moves stdin out so it is dropped (closed) at end of block,
-            // sending EOF to the child process — required for read_to_string to return.
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(args_json.as_bytes())?;
-                // stdin dropped here → EOF sent
-            }
-            child.wait_with_output().map_err(anyhow::Error::from)
-        })?;
+            )
+            .and_then(|mut child| {
+                use std::io::Write;
+                // take() moves stdin out so it is dropped (closed) at end of block,
+                // sending EOF to the child process — required for read_to_string to return.
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin.write_all(args_json.as_bytes())?;
+                    // stdin dropped here → EOF sent
+                }
+                child.wait_with_output().map_err(anyhow::Error::from)
+            })?
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2142,6 +2152,7 @@ fn fetch_url_blocking(url: &str, auth_token: Option<&str>) -> Result<Vec<u8>> {
         cmd.args(["-H", &format!("Authorization: Bearer {token}")]);
     }
     cmd.arg(url);
+    crate::runtime::hide_windows_console_std(&mut cmd);
 
     let output = cmd
         .output()

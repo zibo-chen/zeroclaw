@@ -24,11 +24,12 @@ fn link_count(path: &Path) -> u64 {
     // hard-link count.
     use std::process::Command;
 
-    let output = match Command::new("fsutil")
-        .args(["hardlink", "list"])
-        .arg(path)
-        .output()
-    {
+    let output = match {
+        let mut cmd = Command::new("fsutil");
+        cmd.args(["hardlink", "list"]).arg(path);
+        crate::runtime::hide_windows_console_std(&mut cmd);
+        cmd.output()
+    } {
         Ok(out) => out,
         Err(_) => return 1,
     };

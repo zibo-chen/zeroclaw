@@ -391,14 +391,14 @@ fn escape_for_cmd_start(url: &str) -> String {
 #[cfg(target_os = "windows")]
 async fn open_in_brave(url: &str) -> anyhow::Result<()> {
     let escaped = escape_for_cmd_start(url);
-    let status = tokio::process::Command::new("cmd")
-        .arg("/C")
+    let mut cmd = tokio::process::Command::new("cmd");
+    cmd.arg("/C")
         .arg("start")
         .arg("")
         .arg("brave")
-        .arg(format!("\"{escaped}\""))
-        .status()
-        .await?;
+        .arg(format!("\"{escaped}\""));
+    crate::runtime::hide_windows_console(&mut cmd);
+    let status = cmd.status().await?;
 
     if status.success() {
         Ok(())
@@ -410,14 +410,14 @@ async fn open_in_brave(url: &str) -> anyhow::Result<()> {
 #[cfg(target_os = "windows")]
 async fn open_in_chrome(url: &str) -> anyhow::Result<()> {
     let escaped = escape_for_cmd_start(url);
-    let status = tokio::process::Command::new("cmd")
-        .arg("/C")
+    let mut cmd = tokio::process::Command::new("cmd");
+    cmd.arg("/C")
         .arg("start")
         .arg("")
         .arg("chrome")
-        .arg(format!("\"{escaped}\""))
-        .status()
-        .await?;
+        .arg(format!("\"{escaped}\""));
+    crate::runtime::hide_windows_console(&mut cmd);
+    let status = cmd.status().await?;
 
     if status.success() {
         Ok(())
@@ -429,14 +429,14 @@ async fn open_in_chrome(url: &str) -> anyhow::Result<()> {
 #[cfg(target_os = "windows")]
 async fn open_in_firefox(url: &str) -> anyhow::Result<()> {
     let escaped = escape_for_cmd_start(url);
-    let status = tokio::process::Command::new("cmd")
-        .arg("/C")
+    let mut cmd = tokio::process::Command::new("cmd");
+    cmd.arg("/C")
         .arg("start")
         .arg("")
         .arg("firefox")
-        .arg(format!("\"{escaped}\""))
-        .status()
-        .await?;
+        .arg(format!("\"{escaped}\""));
+    crate::runtime::hide_windows_console(&mut cmd);
+    let status = cmd.status().await?;
 
     if status.success() {
         Ok(())
@@ -448,13 +448,13 @@ async fn open_in_firefox(url: &str) -> anyhow::Result<()> {
 #[cfg(target_os = "windows")]
 async fn open_in_default(url: &str) -> anyhow::Result<()> {
     let escaped = escape_for_cmd_start(url);
-    let status = tokio::process::Command::new("cmd")
-        .arg("/C")
+    let mut cmd = tokio::process::Command::new("cmd");
+    cmd.arg("/C")
         .arg("start")
         .arg("")
-        .arg(format!("\"{escaped}\""))
-        .status()
-        .await?;
+        .arg(format!("\"{escaped}\""));
+    crate::runtime::hide_windows_console(&mut cmd);
+    let status = cmd.status().await?;
 
     if status.success() {
         Ok(())
@@ -466,14 +466,14 @@ async fn open_in_default(url: &str) -> anyhow::Result<()> {
 #[cfg(target_os = "windows")]
 async fn open_in_edge(url: &str) -> anyhow::Result<()> {
     let escaped = escape_for_cmd_start(url);
-    let status = tokio::process::Command::new("cmd")
-        .arg("/C")
+    let mut cmd = tokio::process::Command::new("cmd");
+    cmd.arg("/C")
         .arg("start")
         .arg("")
         .arg("msedge")
-        .arg(format!("\"{escaped}\""))
-        .status()
-        .await?;
+        .arg(format!("\"{escaped}\""));
+    crate::runtime::hide_windows_console(&mut cmd);
+    let status = cmd.status().await?;
 
     if status.success() {
         Ok(())

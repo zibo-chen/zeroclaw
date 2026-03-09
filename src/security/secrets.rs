@@ -227,12 +227,14 @@ impl SecretStore {
                     return Ok(key);
                 };
 
-                match std::process::Command::new("icacls")
-                    .arg(&self.key_path)
-                    .args(["/inheritance:r", "/grant:r"])
-                    .arg(grant_arg)
-                    .output()
-                {
+                match {
+                    let mut cmd = std::process::Command::new("icacls");
+                    cmd.arg(&self.key_path)
+                        .args(["/inheritance:r", "/grant:r"])
+                        .arg(grant_arg);
+                    crate::runtime::hide_windows_console_std(&mut cmd);
+                    cmd.output()
+                } {
                     Ok(o) if !o.status.success() => {
                         tracing::warn!(
                             "Failed to set key file permissions via icacls (exit code {:?})",

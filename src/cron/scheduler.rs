@@ -593,10 +593,21 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    let mut command = Command::new("/bin/sh");
+    let mut command = {
+        #[cfg(target_os = "windows")]
+        {
+            let mut cmd = Command::new("cmd");
+            cmd.arg("/C").arg(&job.command);
+            cmd
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg("-c").arg(&job.command);
+            cmd
+        }
+    };
     command
-        .arg("-c")
-        .arg(&job.command)
         .current_dir(&config.workspace_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -605,6 +616,8 @@ async fn run_job_command_with_timeout(
         // Keep shell child behavior deterministic under CI wrappers that set ENV/BASH_ENV.
         .env_remove("ENV")
         .env_remove("BASH_ENV");
+
+    crate::runtime::hide_windows_console(&mut command);
 
     let child = match command.spawn() {
         Ok(child) => child,

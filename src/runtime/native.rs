@@ -1,6 +1,28 @@
 use super::traits::RuntimeAdapter;
 use std::path::{Path, PathBuf};
 
+/// Apply Windows-specific flags to hide console windows when spawning processes.
+/// On non-Windows platforms this is a no-op.
+#[cfg(target_os = "windows")]
+pub(crate) fn hide_windows_console(cmd: &mut tokio::process::Command) {
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW (0x0800_0000) prevents a visible console window.
+    cmd.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn hide_windows_console(_cmd: &mut tokio::process::Command) {}
+
+/// Same helper for `std::process::Command`.
+#[cfg(target_os = "windows")]
+pub(crate) fn hide_windows_console_std(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn hide_windows_console_std(_cmd: &mut std::process::Command) {}
+
 /// Native runtime — full access, runs on Mac/Linux/Docker/Raspberry Pi
 pub struct NativeRuntime {
     shell: Option<ShellProgram>,
@@ -194,6 +216,7 @@ impl RuntimeAdapter for NativeRuntime {
         let mut process = tokio::process::Command::new(&shell.program);
         shell.add_shell_args(&mut process, command);
         process.current_dir(workspace_dir);
+        hide_windows_console(&mut process);
         Ok(process)
     }
 }

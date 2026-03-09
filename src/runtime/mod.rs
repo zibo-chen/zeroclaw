@@ -5,6 +5,7 @@ pub mod wasm;
 
 pub use docker::DockerRuntime;
 pub use native::NativeRuntime;
+pub(crate) use native::{hide_windows_console, hide_windows_console_std};
 pub use traits::RuntimeAdapter;
 pub use wasm::{WasmCapabilities, WasmRuntime};
 

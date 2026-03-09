@@ -160,12 +160,14 @@ fn find_executable(name: &str) -> Option<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     let which_cmd = "which";
 
-    let output = std::process::Command::new(which_cmd)
-        .arg(name)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let output = {
+        let mut cmd = std::process::Command::new(which_cmd);
+        cmd.arg(name)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        crate::runtime::hide_windows_console_std(&mut cmd);
+        cmd.output().ok()?
+    };
 
     if !output.status.success() {
         return None;
@@ -181,12 +183,14 @@ fn find_executable(name: &str) -> Option<PathBuf> {
 
 /// Get the version string of a CLI tool.
 fn get_version(name: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(name)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = {
+        let mut cmd = std::process::Command::new(name);
+        cmd.args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        crate::runtime::hide_windows_console_std(&mut cmd);
+        cmd.output().ok()?
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

@@ -66,11 +66,10 @@ impl GitOperationsTool {
     }
 
     async fn run_git_command(&self, args: &[&str]) -> anyhow::Result<String> {
-        let output = tokio::process::Command::new("git")
-            .args(args)
-            .current_dir(&self.workspace_dir)
-            .output()
-            .await?;
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.args(args).current_dir(&self.workspace_dir);
+        crate::runtime::hide_windows_console(&mut cmd);
+        let output = cmd.output().await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
