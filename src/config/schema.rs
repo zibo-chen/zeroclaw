@@ -730,6 +730,10 @@ impl Default for TranscriptionConfig {
 
 // ── MCP ─────────────────────────────────────────────────────────
 
+fn default_mcp_server_enabled() -> bool {
+    true
+}
+
 /// Transport type for MCP server connections.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -748,6 +752,9 @@ pub enum McpTransport {
 pub struct McpServerConfig {
     /// Display name used as a tool prefix (`<server>__<tool>`).
     pub name: String,
+    /// Whether this server is enabled (default: true). Disabled servers are skipped.
+    #[serde(default = "default_mcp_server_enabled")]
+    pub enabled: bool,
     /// Transport type (default: stdio).
     #[serde(default)]
     pub transport: McpTransport,

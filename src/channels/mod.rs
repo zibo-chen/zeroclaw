@@ -5535,44 +5535,55 @@ pub async fn start_channels(config: Config) -> Result<()> {
     // system prompt advertises them to the LLM.
     let mut mcp_tool_descs: Vec<(String, String)> = Vec::new();
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
-        tracing::info!(
-            "Initializing MCP client — {} server(s) configured",
-            config.mcp.servers.len()
-        );
-        match crate::tools::McpRegistry::connect_all(&config.mcp.servers).await {
-            Ok(registry) => {
-                let registry = std::sync::Arc::new(registry);
-                let names = registry.tool_names();
-                let mut registered = 0usize;
-                for name in names {
-                    if let Some(def) = registry.get_tool_def(&name).await {
-                        // Capture description for the system prompt.
-                        let desc = def
-                            .description
-                            .clone()
-                            .unwrap_or_else(|| "MCP tool".to_string());
-                        mcp_tool_descs.push((name.clone(), desc));
+        let enabled_servers: Vec<_> = config
+            .mcp
+            .servers
+            .iter()
+            .filter(|s| s.enabled)
+            .cloned()
+            .collect();
+        if enabled_servers.is_empty() {
+            tracing::info!("MCP enabled but all servers are disabled — skipping");
+        } else {
+            tracing::info!(
+                "Initializing MCP client — {} server(s) configured",
+                enabled_servers.len()
+            );
+            match crate::tools::McpRegistry::connect_all(&enabled_servers).await {
+                Ok(registry) => {
+                    let registry = std::sync::Arc::new(registry);
+                    let names = registry.tool_names();
+                    let mut registered = 0usize;
+                    for name in names {
+                        if let Some(def) = registry.get_tool_def(&name).await {
+                            // Capture description for the system prompt.
+                            let desc = def
+                                .description
+                                .clone()
+                                .unwrap_or_else(|| "MCP tool".to_string());
+                            mcp_tool_descs.push((name.clone(), desc));
 
-                        let wrapper = crate::tools::McpToolWrapper::new(
-                            name,
-                            def,
-                            std::sync::Arc::clone(&registry),
-                        );
-                        built_tools.push(Box::new(wrapper));
-                        registered += 1;
+                            let wrapper = crate::tools::McpToolWrapper::new(
+                                name,
+                                def,
+                                std::sync::Arc::clone(&registry),
+                            );
+                            built_tools.push(Box::new(wrapper));
+                            registered += 1;
+                        }
                     }
+                    tracing::info!(
+                        "MCP: {} tool(s) registered from {} server(s)",
+                        registered,
+                        registry.server_count()
+                    );
                 }
-                tracing::info!(
-                    "MCP: {} tool(s) registered from {} server(s)",
-                    registered,
-                    registry.server_count()
-                );
+                Err(e) => {
+                    // Non-fatal — daemon continues with the tools registered above.
+                    tracing::error!("MCP registry failed to initialize: {e:#}");
+                }
             }
-            Err(e) => {
-                // Non-fatal — daemon continues with the tools registered above.
-                tracing::error!("MCP registry failed to initialize: {e:#}");
-            }
-        }
+        } // else (enabled_servers not empty)
     }
 
     let tools_registry = Arc::new(built_tools);
